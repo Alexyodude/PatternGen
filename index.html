@@ -224,6 +224,7 @@
     <div class="btn-row">
       <button class="primary" id="btnEncode">Encode</button>
       <button id="btnDownload" disabled>Download SVG</button>
+      <button id="btnDownloadAll" disabled>Download All (.zip)</button>
       <button id="btnCopy" disabled>Copy SVG</button>
     </div>
   </div>
@@ -262,6 +263,7 @@
 
 <div class="toast" id="toast"></div>
 
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
 <script>
 // ─── Constants ───────────────────────────────────────────────────────
 const COLS = 17;
@@ -1151,6 +1153,7 @@ const panelCountEl = document.getElementById('panelCount');
 const bitInfo     = document.getElementById('bitInfo');
 const btnEncode   = document.getElementById('btnEncode');
 const btnDownload = document.getElementById('btnDownload');
+const btnDownloadAll = document.getElementById('btnDownloadAll');
 const btnCopy     = document.getElementById('btnCopy');
 const previewArea = document.getElementById('previewArea');
 const svgInput    = document.getElementById('svgInput');
@@ -1191,6 +1194,7 @@ btnEncode.addEventListener('click', () => {
   if (!text) {
     previewArea.innerHTML = '<span class="preview-placeholder">Enter some text first</span>';
     btnDownload.disabled = true;
+    btnDownloadAll.disabled = true;
     btnCopy.disabled = true;
     currentSvgs = [];
     return;
@@ -1221,6 +1225,7 @@ btnEncode.addEventListener('click', () => {
     previewArea.appendChild(container);
 
     btnDownload.disabled = false;
+    btnDownloadAll.disabled = false;
     btnCopy.disabled = false;
 
     if (isValid) {
@@ -1253,6 +1258,25 @@ btnDownload.addEventListener('click', () => {
     URL.revokeObjectURL(url);
   }
   showToast('All 3 variants downloaded');
+});
+
+btnDownloadAll.addEventListener('click', async () => {
+  if (!currentSvgs.length) return;
+  const text = inputText.value.trim().toUpperCase() || 'pattern';
+  const folderName = text.replace(/[^A-Z0-9]/g, '_').replace(/_+/g, '_').replace(/^_|_$/g, '') || 'pattern';
+  const zip = new JSZip();
+  const folder = zip.folder(folderName);
+  for (let v = 0; v < VARIANT_COUNT; v++) {
+    folder.file(`variant-${v + 1}.svg`, currentSvgs[v]);
+  }
+  const blob = await zip.generateAsync({ type: 'blob' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `${folderName}.zip`;
+  a.click();
+  URL.revokeObjectURL(url);
+  showToast(`Downloaded ${folderName}.zip`);
 });
 
 btnCopy.addEventListener('click', () => {
