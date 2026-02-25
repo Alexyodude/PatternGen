@@ -932,10 +932,10 @@ class AestheticSolver {
           if (usedCells.has(ck)) continue;
 
           const h = AestheticSolver.hash(cr, cc, dataSeed, variant);
-          // Keep ~30% baseline, up to ~60% in sparse quadrants
+          // Keep ~70% baseline, up to ~90% in sparse quadrants
           const qi = getQuadrant(cr, cc);
           const sparsity = Math.max(0, avgWeight - qWeight[qi]);
-          const keepThresh = 3 + Math.min(Math.floor(sparsity * 0.5), 3);
+          const keepThresh = 7 + Math.min(Math.floor(sparsity * 0.5), 2);
           if (h % 10 < (10 - keepThresh)) continue;
 
           if (tryAdd(corner.r1, corner.c1, corner.r2, corner.c2, 'arc', true)) {
@@ -966,14 +966,14 @@ class AestheticSolver {
     });
 
     let diagCount = 0;
-    const maxDiags = Math.round((ROWS - 1) * (COLS - 1) * 0.05); // ~5% of cells
+    const maxDiags = Math.round((ROWS - 1) * (COLS - 1) * 0.10); // ~10% of cells
     for (const cand of diagCandidates) {
       if (diagCount >= maxDiags) break;
       const {r, c, h, qi, ck} = cand;
 
       const dir = h % 2;
       const surrounding = AestheticSolver.countCellEdges(grid, r, c);
-      const type = surrounding >= 2 ? 'arc' : 'line';
+      const type = surrounding >= 1 ? 'arc' : 'line';
       let added = false;
       if (dir === 0) added = tryAdd(r, c, r + 1, c + 1, type);
       else added = tryAdd(r, c + 1, r + 1, c, type);
