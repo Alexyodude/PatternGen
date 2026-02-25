@@ -451,6 +451,7 @@ PatternDecoder &mdash; SVG &rarr; grid &rarr; text</pre>
       <button id="btnDownload" disabled>Download SVG</button>
       <button id="btnDownloadAll" disabled>Download All (.zip)</button>
       <button id="btnCopy" disabled>Copy SVG</button>
+      <button id="btnShare" disabled>Share Link</button>
     </div>
   </div>
 
@@ -1386,6 +1387,7 @@ const btnDecode   = document.getElementById('btnDecode');
 const decodedOutput = document.getElementById('decodedOutput');
 const dropZone    = document.getElementById('dropZone');
 const fileInput   = document.getElementById('fileInput');
+const btnShare    = document.getElementById('btnShare');
 const toastEl     = document.getElementById('toast');
 const docModal    = document.getElementById('docModal');
 const btnDocs     = document.getElementById('btnDocs');
@@ -1430,6 +1432,7 @@ btnEncode.addEventListener('click', () => {
     btnDownload.disabled = true;
     btnDownloadAll.disabled = true;
     btnCopy.disabled = true;
+    btnShare.disabled = true;
     currentSvgs = [];
     return;
   }
@@ -1461,6 +1464,7 @@ btnEncode.addEventListener('click', () => {
     btnDownload.disabled = false;
     btnDownloadAll.disabled = false;
     btnCopy.disabled = false;
+    btnShare.disabled = false;
 
     if (isValid) {
       showToast('3 variants encoded — decodes correctly via intersection');
@@ -1517,6 +1521,16 @@ btnCopy.addEventListener('click', () => {
   if (!currentSvgs.length) return;
   navigator.clipboard.writeText(currentSvgs[selectedVariant])
     .then(() => showToast(`Variant ${selectedVariant + 1} copied to clipboard`));
+});
+
+btnShare.addEventListener('click', () => {
+  const text = inputText.value.trim();
+  if (!text) return;
+  const url = new URL(window.location.href.split('?')[0]);
+  url.searchParams.set('text', text);
+  navigator.clipboard.writeText(url.toString())
+    .then(() => showToast('Share link copied to clipboard'));
+  history.replaceState(null, '', url.toString());
 });
 
 // Split pasted text into individual SVG strings
@@ -1700,6 +1714,15 @@ inputText.addEventListener('input', () => {
 
 // Init info
 updateInfo();
+
+// Auto-encode from URL query parameter
+const urlParams = new URLSearchParams(window.location.search);
+const sharedText = urlParams.get('text');
+if (sharedText) {
+  inputText.value = sharedText;
+  updateInfo();
+  btnEncode.click();
+}
 </script>
 </body>
 </html>
