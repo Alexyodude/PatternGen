@@ -928,13 +928,25 @@ class AestheticSolver {
       return false;
     };
 
+    // Check if a new diagonal would share a node with an existing diagonal.
+    // Sharing a node means the thick strokes visually cross at that point.
+    const sharesNodeWithDiag = (r1, c1, r2, c2) => {
+      for (const d of grid.dEdges) {
+        if ((d.r1 === r1 && d.c1 === c1) || (d.r1 === r2 && d.c1 === c2) ||
+            (d.r2 === r1 && d.c2 === c1) || (d.r2 === r2 && d.c2 === c2)) return true;
+      }
+      return false;
+    };
+
     // Helper: try to add a diagonal — rejects straight-line triangles, cycles, and degree overflow.
     // Arcs are exempt from the triangle check: they curve outward so the enclosed
     // region is filled by the thick stroke, unlike straight lines which leave a visible hole.
     // Arcs are rejected if existing H/V edges would cross through their midpoint.
+    // All diagonals are rejected if they share a node with an existing diagonal.
     const tryAdd = (r1, c1, r2, c2, type, skipCycleCheck = false) => {
       if (type !== 'arc' && wouldFormTriangle(r1, c1, r2, c2)) return false;
       if (type === 'arc' && arcCrossesExistingHV(r1, c1, r2, c2)) return false;
+      if (sharesNodeWithDiag(r1, c1, r2, c2)) return false;
       const a = nodeId(r1, c1), b = nodeId(r2, c2);
       if (!skipCycleCheck && uf.connected(a, b)) return false;
       if (grid.getNodeDegree(r1, c1) >= MAX_DEG) return false;
