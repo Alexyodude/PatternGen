@@ -14,7 +14,7 @@ Five core classes, all in `index.html`:
 
 | Class | Responsibility |
 |---|---|
-| `CircuitGrid` | Edge storage (H/V/diagonal), bit serialization, adjacency graph |
+| `CircuitGrid` | Edge storage (H/V/diagonal), smooth corners, bit serialization, adjacency graph |
 | `TextEncoder_` | Text → bit stream → grid edges |
 | `AestheticSolver` | Adds decorative arcs/diagonals (non-data-carrying) |
 | `SVGRenderer` | Grid → SVG path strings via polyline chaining |
@@ -135,13 +135,21 @@ Adds decorative diagonal edges to fill visual space. Three constraints:
 
 Both passes use `dataSeed` (derived from character codes) and `variant` in the hash, so different input text produces different aesthetic patterns.
 
-### Pass 1: L-Corner Arcs (quadrant-adaptive)
+### Pass 1: Smooth Corners at L-Corners (quadrant-adaptive)
 
-Scans all nodes with 2+ H/V neighbors forming a right angle. Arcs skip the cycle check (both endpoints are already connected through the bend node). Base keep-rate ~30%, boosted up to ~60% in sparse quadrants (tracks per-quadrant edge weight vs average).
+Scans all degree-2 HV nodes forming a right angle (one H neighbor + one V neighbor). Instead of adding separate diagonal arc edges, the bend node is marked in `grid.smoothCorners` for inline bezier rendering. This eliminates the visual overlap where a sharp L-corner would cover an arc.
 
-### Pass 2: Fill Diagonals (sparsity-sorted, ~5% of 2×2 cells)
+**Constraints:**
+- Only at degree-2 HV nodes (ensures the chain extends through the bend)
+- **Variant-independent** — uses `hash(r, c, dataSeed, 0)` (always variant 0), so all 3 variants smooth the same corners. Essential for 3-variant AND decode.
+- Base keep-rate ~70%, boosted up to ~90% in sparse quadrants
+- Blocks opposite-side H/V edges and non-L-corner edges at the bend node (via `arcBlockedHV`) to prevent random fill from increasing the bend's degree
 
-Collects all unfilled 2×2 cells, sorts by quadrant sparsity (sparsest first), then by hash. Fills up to `5%` of cells. Type is arc if surrounding H/V edges ≥ 2, else straight line. Subject to cycle and degree constraints.
+**Rendering:** In `SVGRenderer.chainToPathD`, when the chain passes through a marked bend node with an H→V or V→H transition, the sharp corner is replaced with a quarter-circle bezier from `prev` directly to `next`, skipping the bend node. Only applied when the chain has > 3 nodes to ensure the bezier is embedded within H/V segments (not standalone), which is needed for decoder disambiguation.
+
+### Pass 2: Fill Diagonals (sparsity-sorted, ~10% of 2×2 cells)
+
+Collects all unfilled 2×2 cells, sorts by quadrant sparsity (sparsest first), then by hash. Fills up to `10%` of cells. Type is arc if surrounding H/V edges ≥ 1, else straight line. Subject to cycle and degree constraints. Uses `variant` in hash, so placement differs across variants.
 
 ### Encoding Order
 
@@ -198,9 +206,16 @@ The `hash(r, c, seed, variant)` function provides deterministic pseudo-random de
 ### Polyline Chaining
 
 1. Build adjacency graph from all edges (H, V, diagonal)
-2. Start chains from degree-1 nodes, then remaining nodes
-3. Extend chains through degree-2 nodes
-4. Each chain becomes one `<path>` element
+2. Fill-diagonal arcs are rendered as standalone `<path>` elements (M+C only) and removed from the adjacency graph before chaining
+3. Start chains from degree-1 nodes, then remaining nodes
+4. Extend chains through degree-2 nodes
+5. Each chain becomes one `<path>` element
+
+### Smooth Corner Rendering
+
+When a chain passes through a smooth corner bend node (H→V or V→H transition), the two edges are replaced with a single quarter-circle bezier from `prev` to `next`. This only applies to chains with > 3 nodes — shorter chains keep sharp corners to remain distinguishable from standalone fill-diagonal arcs in the decoder.
+
+A `lastWasBezier` flag prevents the H/V merge optimization from overwriting a bezier command.
 
 ### Path Commands
 
@@ -210,16 +225,24 @@ The `hash(r, c, seed, variant)` function provides deterministic pseudo-random de
 | Vertical | `V{y}` | `V142.013` |
 | Diagonal line | `L{x} {y}` | `L364.295 142.013` |
 | Quarter-circle arc | `C{cp1x} {cp1y} {cp2x} {cp2y} {x} {y}` | Cubic bezier |
+| Smooth corner | `C{cp1x} {cp1y} {cp2x} {cp2y} {x} {y}` | Bezier replacing H→V or V→H at bend |
 
 Consecutive same-direction H or V segments are merged into a single command.
 
-### Arc Formula
+### Arc/Bezier Formulas
 
-Quarter-circle cubic bezier from `(px, py)` to `(tx, ty)`:
+**H→V smooth corner** (or standalone H-first arc) from `(px, py)` to `(nx, ny)`:
 ```
-dx = tx - px, dy = ty - py
+dx = nx - px, dy = ny - py
 CP1 = (px + dx * K, py)        // horizontal departure
-CP2 = (tx, ty - dy * K)        // vertical arrival
+CP2 = (nx, ny - dy * K)        // vertical arrival
+```
+
+**V→H smooth corner** from `(px, py)` to `(nx, ny)`:
+```
+dx = nx - px, dy = ny - py
+CP1 = (px, py + dy * K)        // vertical departure
+CP2 = (nx - dx * K, ny)        // horizontal arrival
 ```
 
 ### Stroke Attributes
@@ -243,6 +266,18 @@ Requires all 3 variant SVGs. Uses `PatternDecoder.decode3(svgStrings[3])`.
    b. Read character codes (6 bits each)
    c. Verify checksum
 4. Concatenate text from all panels
+
+### Smooth Corner Bezier-to-H/V Inference
+
+When the decoder encounters a cubic bezier (`C` command) within a multi-command path (`drawCmds > 1`), it checks if the start and end points snap to diagonally adjacent grid nodes (dr=1, dc=1). If so, this is a smooth corner bezier and the decoder infers the two replaced H/V edges:
+
+1. Determine the bend node from control points:
+   - If cp1y ≈ cy (first CP departs horizontally) → H→V: bend = (snap1.r, snap2.c)
+   - Otherwise (first CP departs vertically) → V→H: bend = (snap2.r, snap1.c)
+2. Emit H edge between bend and its row-sharing endpoint
+3. Emit V edge between bend and its column-sharing endpoint
+
+Standalone bezier paths (drawCmds = 1, just M+C) are fill-diagonal arcs and do NOT generate H/V inference — they are purely aesthetic.
 
 ### Y-Range Filtering (Multi-Panel)
 

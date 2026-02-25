@@ -525,9 +525,12 @@ class CircuitGrid {
     this.hEdges = Array.from({length: ROWS}, () => new Uint8Array(COLS - 1));
     // vEdges[row][col] — row: 0..3, col: 0..16
     this.vEdges = Array.from({length: ROWS - 1}, () => new Uint8Array(COLS));
-    // dEdges: diagonal edges for aesthetics
+    // dEdges: diagonal edges for aesthetics (fill diags only)
     // Each entry: { r1, c1, r2, c2, type: 'arc'|'line' }
     this.dEdges = [];
+    // smoothCorners: bend nodes where H→V corners are rendered as smooth bezier curves.
+    // Map from "r,c" → {r1, c1, r2, c2} (the two arc endpoints, H-connected first)
+    this.smoothCorners = new Map();
   }
 
   setH(row, col, val) { this.hEdges[row][col] = val ? 1 : 0; }
@@ -761,18 +764,41 @@ class TextEncoder_ {
       // Each selected slot has ~50% chance of fillBit=1 per variant, so we
       // select ~2× the needed count to compensate.
       const totalHV = qExisting.reduce((a, b) => a + b, 0);
-      const totalVisual = totalHV + grid.dEdges.length;
+      const totalVisual = totalHV + grid.dEdges.length + grid.smoothCorners.size;
       const TARGET_VISUAL = 58;
       const totalNeeded = Math.max(0, TARGET_VISUAL - totalVisual);
       const selectNeeded = totalNeeded * 2; // ~50% fill rate per variant
       const basePerQ = selectNeeded / NQ;
       const avgExisting = totalHV / NQ;
-      // Build set of H/V edges that would visually cross through an arc's midpoint.
-      // Arc from (r1,c1)→(r2,c2) departs horizontally then arrives vertically,
-      // curving through the cell interior. The opposite-side edges cross the belly:
-      //   H edge at row r2 between min(c1,c2)
-      //   V edge at col c1 between min(r1,r2)
+      // Build set of H/V edges blocked from random fill.
       const arcBlockedHV = new Set();
+
+      // 1) Smooth corners: block opposite-side edges that cross the curve's belly
+      //    AND block all non-L-corner edges at the bend node to keep its degree = 2.
+      //    The renderer only smooths corners at degree-2 chain nodes.
+      for (const [bendKey, arc] of grid.smoothCorners) {
+        const [br, bc] = bendKey.split(',').map(Number);
+        const {r1, c1, r2, c2} = arc;
+        // Block opposite-side edges (cross the curve belly)
+        const hc = Math.min(c1, c2);
+        if (hc >= 0 && hc < COLS - 1) arcBlockedHV.add(`H:${r2},${hc}`);
+        const vr = Math.min(r1, r2);
+        if (vr >= 0 && vr < ROWS - 1) arcBlockedHV.add(`V:${vr},${c1}`);
+        // Block all H/V edges at bend node except the two L-corner edges.
+        // This prevents random fill from increasing the bend's degree beyond 2.
+        const lcH = `H:${br},${Math.min(bc, c1 === bc ? c1 : (c2 === bc ? c2 : bc))}`;
+        const lcV = `V:${Math.min(br, r1 === br ? r1 : (r2 === br ? r2 : br))},${bc}`;
+        // Compute which H and V are the L-corner edges
+        const lcHkey = (r1 === br) ? `H:${br},${Math.min(bc, c1)}` : `H:${br},${Math.min(bc, c2)}`;
+        const lcVkey = (c1 === bc) ? `V:${Math.min(br, r1)},${bc}` : `V:${Math.min(br, r2)},${bc}`;
+        // Block all 4 possible edges at bend, except the 2 L-corner edges
+        if (bc > 0) { const k = `H:${br},${bc-1}`; if (k !== lcHkey) arcBlockedHV.add(k); }
+        if (bc < COLS-1) { const k = `H:${br},${bc}`; if (k !== lcHkey) arcBlockedHV.add(k); }
+        if (br > 0) { const k = `V:${br-1},${bc}`; if (k !== lcVkey) arcBlockedHV.add(k); }
+        if (br < ROWS-1) { const k = `V:${br},${bc}`; if (k !== lcVkey) arcBlockedHV.add(k); }
+      }
+
+      // 2) Block opposite-side edges for fill diagonal arcs
       for (const d of grid.dEdges) {
         if (d.type !== 'arc') continue;
         const {r1, c1, r2, c2} = d;
@@ -967,9 +993,15 @@ class AestheticSolver {
         if (grid.getV(r, c)) qWeight[getQuadrant(r, c)]++;
     const avgWeight = qWeight.reduce((a, b) => a + b, 0) / NQ;
 
-    // Pass 1: Arcs at L-corners — prefer sparse quadrants
+    // Pass 1: Smooth corners at L-corners — mark bend nodes for bezier rendering.
+    // Instead of adding separate diagonal arc edges, we mark the bend node so the
+    // renderer smooths the H→V (or V→H) corner with a quarter-circle bezier.
+    // This eliminates the "L covering the arc" overlap issue.
+    // Only smooth at degree-2 nodes — the chain only extends through degree-2 nodes,
+    // and nodes with more edges have data that would be hidden by smoothing.
     for (let r = 0; r < ROWS; r++) {
       for (let c = 0; c < COLS; c++) {
+        if (grid.getNodeDegreeHV(r, c) !== 2) continue;
         const corners = AestheticSolver.findLCorners(grid, r, c);
         for (const corner of corners) {
           const cr = Math.min(corner.r1, corner.r2);
@@ -977,17 +1009,24 @@ class AestheticSolver {
           const ck = cellKey(cr, cc);
           if (usedCells.has(ck)) continue;
 
-          const h = AestheticSolver.hash(cr, cc, dataSeed, variant);
+          // Use variant-independent hash so smooth corners are consistent across
+          // all 3 variants. This is essential: the decoder must see the same H/V
+          // edges in all variants for the AND-intersection to work correctly.
+          const h = AestheticSolver.hash(cr, cc, dataSeed, 0);
           // Keep ~70% baseline, up to ~90% in sparse quadrants
           const qi = getQuadrant(cr, cc);
           const sparsity = Math.max(0, avgWeight - qWeight[qi]);
           const keepThresh = 7 + Math.min(Math.floor(sparsity * 0.5), 2);
           if (h % 10 < (10 - keepThresh)) continue;
 
-          if (tryAdd(corner.r1, corner.c1, corner.r2, corner.c2, 'arc', true)) {
-            markCellAndNeighbors(cr, cc);
-            qWeight[qi]++;
-          }
+          // Check if opposite H/V edges would cross the smooth curve
+          if (arcCrossesExistingHV(corner.r1, corner.c1, corner.r2, corner.c2)) continue;
+
+          // Mark the bend node for smooth rendering (don't add a diagonal edge)
+          grid.smoothCorners.set(`${r},${c}`, { r1: corner.r1, c1: corner.c1, r2: corner.r2, c2: corner.c2 });
+          markCellAndNeighbors(cr, cc);
+          qWeight[qi]++;
+          break; // One smooth corner per bend node
         }
       }
     }
@@ -1044,14 +1083,21 @@ class AestheticSolver {
     if (r > 0 && grid.getV(r-1, c)) neighbors.push({r: r-1, c, dir: 'U'});
     if (r < ROWS-1 && grid.getV(r, c)) neighbors.push({r: r+1, c, dir: 'D'});
 
-    // Find all pairs that form right angles
+    // Find all pairs that form right angles.
+    // Always put the H-connected neighbor as r1 and V-connected as r2.
+    // This ensures the arc bezier departs horizontally (matching the H-edge)
+    // and arrives vertically (matching the V-edge).
     for (let i = 0; i < neighbors.length; i++) {
       for (let j = i + 1; j < neighbors.length; j++) {
         const a = neighbors[i], b = neighbors[j];
         const aIsH = (a.dir === 'L' || a.dir === 'R');
         const bIsH = (b.dir === 'L' || b.dir === 'R');
         if (aIsH === bIsH) continue; // same axis, not a corner
-        corners.push({ r1: a.r, c1: a.c, r2: b.r, c2: b.c });
+        if (aIsH) {
+          corners.push({ r1: a.r, c1: a.c, r2: b.r, c2: b.c });
+        } else {
+          corners.push({ r1: b.r, c1: b.c, r2: a.r, c2: a.c });
+        }
       }
     }
     return corners;
@@ -1088,7 +1134,6 @@ class SVGRenderer {
   }
 
   static renderGrid(grid, yOff) {
-    // Build adjacency and chain edges into polylines
     const adj = grid.getAdjacency();
     const visitedEdges = new Set();
     const edgeKey = (r1, c1, r2, c2) => {
@@ -1097,69 +1142,62 @@ class SVGRenderer {
     };
 
     const allPaths = [];
+    const fmt = (v) => Math.round(v * 1000) / 1000;
 
-    // Find all edges
-    const allEdges = [];
-    for (const nodeKey in adj) {
-      const [r, c] = nodeKey.split(',').map(Number);
-      for (const nb of adj[nodeKey]) {
-        const ek = edgeKey(r, c, nb.r, nb.c);
-        if (!visitedEdges.has(ek)) {
-          visitedEdges.add(ek);
-          allEdges.push({ r1: r, c1: c, r2: nb.r, c2: nb.c, type: nb.type });
-        }
-      }
+    // Render fill-diagonal arcs as separate standalone paths
+    const arcEdgeKeys = new Set();
+    for (const e of grid.dEdges) {
+      if (e.type !== 'arc') continue;
+      const ek = edgeKey(e.r1, e.c1, e.r2, e.c2);
+      arcEdgeKeys.add(ek);
+      const sx = nodeX(e.c1), sy = nodeY(e.r1) + yOff;
+      const ex = nodeX(e.c2), ey = nodeY(e.r2) + yOff;
+      const dx = ex - sx, dy = ey - sy;
+      allPaths.push(`M${fmt(sx)} ${fmt(sy)}C${fmt(sx + dx * K)} ${fmt(sy)} ${fmt(ex)} ${fmt(ey - dy * K)} ${fmt(ex)} ${fmt(ey)}`);
     }
 
-    // Reset visited for chaining
-    visitedEdges.clear();
+    // Remove fill-diagonal ARC edges from adjacency so they don't chain
+    for (const nodeKey in adj) {
+      adj[nodeKey] = adj[nodeKey].filter(nb => {
+        if (nb.type !== 'ARC') return true;
+        const [r, c] = nodeKey.split(',').map(Number);
+        return !arcEdgeKeys.has(edgeKey(r, c, nb.r, nb.c));
+      });
+      if (adj[nodeKey].length === 0) delete adj[nodeKey];
+    }
 
-    // Build chains: walk from degree-1 or degree-3 endpoints
+    // Build chains
     const nodeKeys = Object.keys(adj);
-    // Sort to ensure deterministic order
     nodeKeys.sort();
-
-    // Compute degrees
     const degrees = {};
     for (const nk of nodeKeys) degrees[nk] = adj[nk].length;
-
-    // Start from degree-1 nodes first, then any unvisited
     const startNodes = nodeKeys.filter(nk => degrees[nk] === 1);
     const otherNodes = nodeKeys.filter(nk => degrees[nk] !== 1);
 
     const tryChain = (startKey) => {
       const [sr, sc] = startKey.split(',').map(Number);
-      // Find an unvisited edge from this node
       const neighbors = adj[startKey];
       for (const nb of neighbors) {
         const ek = edgeKey(sr, sc, nb.r, nb.c);
         if (visitedEdges.has(ek)) continue;
 
-        // Start a chain
         const chain = [{ r: sr, c: sc }];
-        let cr = sr, cc = sc;
         let nr = nb.r, nc = nb.c;
-        let lastType = nb.type;
         visitedEdges.add(ek);
-        chain.push({ r: nr, c: nc, type: lastType, arcFrom: nb.arcFrom });
+        chain.push({ r: nr, c: nc, type: nb.type });
 
-        // Extend chain through degree-2 nodes, capped at MAX_CHAIN edges
         while (chain.length - 1 < MAX_CHAIN) {
           const nk = `${nr},${nc}`;
           const nbs = adj[nk];
           if (!nbs) break;
-
           let found = false;
           for (const next of nbs) {
             const nek = edgeKey(nr, nc, next.r, next.c);
             if (visitedEdges.has(nek)) continue;
             if (degrees[nk] !== 2) { found = false; break; }
-
             visitedEdges.add(nek);
-            cr = nr; cc = nc;
             nr = next.r; nc = next.c;
-            lastType = next.type;
-            chain.push({ r: nr, c: nc, type: lastType, arcFrom: next.arcFrom });
+            chain.push({ r: nr, c: nc, type: next.type });
             found = true;
             break;
           }
@@ -1167,23 +1205,21 @@ class SVGRenderer {
         }
 
         if (chain.length >= 2) {
-          allPaths.push(SVGRenderer.chainToPathD(chain, yOff));
+          allPaths.push(SVGRenderer.chainToPathD(chain, yOff, grid.smoothCorners));
         }
       }
     };
 
-    // Process degree-1 nodes first
     for (const nk of startNodes) tryChain(nk);
-    // Then remaining (for cycles or degree-3+)
     for (const nk of otherNodes) tryChain(nk);
-
     return allPaths;
   }
 
-  static chainToPathD(chain, yOff) {
+  static chainToPathD(chain, yOff, smoothCorners) {
     const fmt = (v) => Math.round(v * 1000) / 1000;
     const parts = [];
     parts.push(`M${fmt(nodeX(chain[0].c))} ${fmt(nodeY(chain[0].r) + yOff)}`);
+    let lastWasBezier = false; // Prevents H/V merge from overwriting a bezier
 
     for (let i = 1; i < chain.length; i++) {
       const prev = chain[i - 1];
@@ -1192,46 +1228,48 @@ class SVGRenderer {
       const cx = fmt(nodeX(cur.c));
       const cy = fmt(nodeY(cur.r) + yOff);
 
+      // Smooth corner: when cur is a marked bend node and the chain transitions
+      // H→V or V→H, replace the sharp 90° corner with a quarter-circle bezier
+      // from prev directly to next, skipping the bend node.
+      // Only apply smooth corner if chain has > 3 nodes. With exactly 3 nodes the
+      // bezier would be the entire path (M+C), indistinguishable from a standalone
+      // fill-diagonal arc, which breaks decoder H/V inference.
+      if (smoothCorners && chain.length > 3 && smoothCorners.has(`${cur.r},${cur.c}`) && i + 1 < chain.length) {
+        const next = chain[i + 1];
+        const nextType = next.type;
+        if ((type === 'H' && nextType === 'V') || (type === 'V' && nextType === 'H')) {
+          const px = nodeX(prev.c), py = nodeY(prev.r) + yOff;
+          const nx = nodeX(next.c), ny = nodeY(next.r) + yOff;
+          const dx = nx - px, dy = ny - py;
+          if (type === 'H') {
+            // H→V: depart horizontally from prev, arrive vertically into next
+            parts.push(`C${fmt(px + dx*K)} ${fmt(py)} ${fmt(nx)} ${fmt(ny - dy*K)} ${fmt(nx)} ${fmt(ny)}`);
+          } else {
+            // V→H: depart vertically from prev, arrive horizontally into next
+            parts.push(`C${fmt(px)} ${fmt(py + dy*K)} ${fmt(nx - dx*K)} ${fmt(ny)} ${fmt(nx)} ${fmt(ny)}`);
+          }
+          i++; // Skip next node (already consumed by the bezier)
+          lastWasBezier = true;
+          continue;
+        }
+      }
+
       if (type === 'H') {
-        if (i > 1 && chain[i-1].type === 'H' && cur.r === chain[i-2].r) {
+        if (!lastWasBezier && i > 1 && chain[i-1].type === 'H' && cur.r === chain[i-2].r) {
           parts[parts.length - 1] = `H${cx}`;
         } else {
           parts.push(`H${cx}`);
         }
       } else if (type === 'V') {
-        if (i > 1 && chain[i-1].type === 'V' && cur.c === chain[i-2].c) {
+        if (!lastWasBezier && i > 1 && chain[i-1].type === 'V' && cur.c === chain[i-2].c) {
           parts[parts.length - 1] = `V${cy}`;
         } else {
           parts.push(`V${cy}`);
         }
-      } else if (type === 'ARC') {
-        // Use the canonical arc direction (arcFrom) to ensure the curve always
-        // bends the correct way, regardless of polyline traversal direction.
-        // Forward: departs horizontal, arrives vertical.
-        // Reverse: swap control points to trace the same curve backward.
-        const af = cur.arcFrom;
-        const isForward = af && af.r === prev.r && af.c === prev.c;
-        const px = nodeX(prev.c), py = nodeY(prev.r) + yOff;
-        const tx = nodeX(cur.c),  ty = nodeY(cur.r) + yOff;
-        if (isForward) {
-          const dx = tx - px, dy = ty - py;
-          parts.push(`C${fmt(px + dx*K)} ${fmt(py)} ${fmt(tx)} ${fmt(ty - dy*K)} ${cx} ${cy}`);
-        } else {
-          // Reverse: the original arc was from arcFrom to the other end.
-          // Original control points: CP1=(ox+odx*K, oy), CP2=(otx, oty-ody*K)
-          // Reversed bezier: swap CP1↔CP2 to trace the same curve backward.
-          const ox = af ? nodeX(af.c) : px;
-          const oy = af ? nodeY(af.r) + yOff : py;
-          const otx = af ? (af.r === prev.r && af.c === prev.c ? tx : px) : tx;
-          const oty = af ? (af.r === prev.r && af.c === prev.c ? ty : py) : ty;
-          const odx = otx - ox, ody = oty - oy;
-          // Original CP1 = (ox + odx*K, oy), Original CP2 = (otx, oty - ody*K)
-          // Reversed: CP1' = original CP2, CP2' = original CP1
-          parts.push(`C${fmt(otx)} ${fmt(oty - ody*K)} ${fmt(ox + odx*K)} ${fmt(oy)} ${cx} ${cy}`);
-        }
       } else if (type === 'DIAG') {
         parts.push(`L${cx} ${cy}`);
       }
+      lastWasBezier = false;
     }
 
     return parts.join('');
@@ -1375,7 +1413,10 @@ class PatternDecoder {
     // Tokenize the path d attribute
     const tokens = d.match(/[MLHVCSQTAZ][^MLHVCSQTAZ]*/gi) || [];
     let cx = 0, cy = 0; // Current point
-
+    // Count draw commands (non-M) to distinguish standalone fill-diagonal arcs
+    // (just M+C, drawCmds=1) from smooth corner beziers within longer chains
+    // (drawCmds > 1). Standalone arcs are aesthetic and must not infer H/V edges.
+    const drawCmds = tokens.filter(t => t[0] !== 'M').length;
     for (const token of tokens) {
       const cmd = token[0];
       const nums = token.slice(1).trim().split(/[\s,]+/).map(Number).filter(n => !isNaN(n));
@@ -1424,9 +1465,39 @@ class PatternDecoder {
           break;
         }
         case 'C': {
-          // Cubic bezier — skip to endpoint (ignore control points)
-          // 6 numbers: cp1x cp1y cp2x cp2y x y
-          if (nums.length >= 6) { cx = nums[4]; cy = nums[5]; }
+          // Cubic bezier — 6 numbers: cp1x cp1y cp2x cp2y x y
+          if (nums.length >= 6) {
+            const nx = nums[4], ny = nums[5];
+            // Smooth corners render H→V transitions as bezier curves within chains.
+            // Standalone fill-diagonal arcs (M+C only, drawCmds=1) are aesthetic and
+            // must NOT infer H/V edges — they'd create false positives in the decode.
+            // Only infer H/V from beziers that are part of longer chains (drawCmds > 1).
+            if (drawCmds > 1 && inRange(cy) && inRange(ny)) {
+              const snap1 = PatternDecoder.snapToGrid(cx, cy, yOff);
+              const snap2 = PatternDecoder.snapToGrid(nx, ny, yOff);
+              const dr = Math.abs(snap2.r - snap1.r);
+              const dc = Math.abs(snap2.c - snap1.c);
+              if (dr === 1 && dc === 1) {
+                // Diagonal bezier = smooth corner. Infer bend node.
+                // The bend is at (snap1.r, snap2.c) or (snap2.r, snap1.c).
+                // Check control points to determine which: the first CP
+                // shares Y with start (H departure) → bend at (snap1.r, snap2.c),
+                // or shares X with start (V departure) → bend at (snap2.r, snap1.c).
+                const cp1y = nums[1];
+                const bendR = (Math.abs(cp1y - cy) < CELL * 0.3) ? snap1.r : snap2.r;
+                const bendC = (bendR === snap1.r) ? snap2.c : snap1.c;
+                // H edge between snap1/snap2 and bend (whichever shares the row)
+                const hRow = bendR;
+                const hC1 = Math.min(snap1.c === bendC ? snap2.c : snap1.c, bendC);
+                edges.push({ type: 'H', r: hRow, c1: hC1, c2: hC1 + 1 });
+                // V edge between snap1/snap2 and bend (whichever shares the col)
+                const vCol = bendC;
+                const vR1 = Math.min(snap1.r === bendR ? snap2.r : snap1.r, bendR);
+                edges.push({ type: 'V', c: vCol, r1: vR1, r2: vR1 + 1 });
+              }
+            }
+            cx = nx; cy = ny;
+          }
           break;
         }
       }
