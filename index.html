@@ -633,11 +633,13 @@ class CircuitGrid {
         }
       }
     }
-    // Diagonal edges
+    // Diagonal edges — arcs store their canonical direction (r1,c1)→(r2,c2)
+    // so the renderer can always produce the correct bezier curve.
     for (const e of this.dEdges) {
       ensureNode(e.r1, e.c1); ensureNode(e.r2, e.c2);
-      adj[key(e.r1,e.c1)].push({ r: e.r2, c: e.c2, type: e.type === 'arc' ? 'ARC' : 'DIAG' });
-      adj[key(e.r2,e.c2)].push({ r: e.r1, c: e.c1, type: e.type === 'arc' ? 'ARC' : 'DIAG' });
+      const t = e.type === 'arc' ? 'ARC' : 'DIAG';
+      adj[key(e.r1,e.c1)].push({ r: e.r2, c: e.c2, type: t, arcFrom: t === 'ARC' ? {r:e.r1,c:e.c1} : null });
+      adj[key(e.r2,e.c2)].push({ r: e.r1, c: e.c1, type: t, arcFrom: t === 'ARC' ? {r:e.r1,c:e.c1} : null });
     }
 
     return adj;
@@ -928,25 +930,24 @@ class AestheticSolver {
       return false;
     };
 
-    // Check if a new diagonal would share a node with an existing diagonal.
-    // Sharing a node means the thick strokes visually cross at that point.
-    const sharesNodeWithDiag = (r1, c1, r2, c2) => {
-      for (const d of grid.dEdges) {
-        if ((d.r1 === r1 && d.c1 === c1) || (d.r1 === r2 && d.c1 === c2) ||
-            (d.r2 === r1 && d.c2 === c1) || (d.r2 === r2 && d.c2 === c2)) return true;
-      }
-      return false;
+    // Mark a cell and ALL 8 surrounding cells as used (blocks future diagonals nearby).
+    // With stroke-width 61.7 on a 111.1 grid, diagonals in adjacent cells visually cross.
+    const markCellAndNeighbors = (r, c) => {
+      for (let dr = -1; dr <= 1; dr++)
+        for (let dc = -1; dc <= 1; dc++) {
+          const nr = r + dr, nc = c + dc;
+          if (nr >= 0 && nr < ROWS - 1 && nc >= 0 && nc < COLS - 1)
+            usedCells.add(cellKey(nr, nc));
+        }
     };
 
     // Helper: try to add a diagonal — rejects straight-line triangles, cycles, and degree overflow.
     // Arcs are exempt from the triangle check: they curve outward so the enclosed
     // region is filled by the thick stroke, unlike straight lines which leave a visible hole.
     // Arcs are rejected if existing H/V edges would cross through their midpoint.
-    // All diagonals are rejected if they share a node with an existing diagonal.
     const tryAdd = (r1, c1, r2, c2, type, skipCycleCheck = false) => {
       if (type !== 'arc' && wouldFormTriangle(r1, c1, r2, c2)) return false;
       if (type === 'arc' && arcCrossesExistingHV(r1, c1, r2, c2)) return false;
-      if (sharesNodeWithDiag(r1, c1, r2, c2)) return false;
       const a = nodeId(r1, c1), b = nodeId(r2, c2);
       if (!skipCycleCheck && uf.connected(a, b)) return false;
       if (grid.getNodeDegree(r1, c1) >= MAX_DEG) return false;
@@ -984,7 +985,7 @@ class AestheticSolver {
           if (h % 10 < (10 - keepThresh)) continue;
 
           if (tryAdd(corner.r1, corner.c1, corner.r2, corner.c2, 'arc', true)) {
-            usedCells.add(ck);
+            markCellAndNeighbors(cr, cc);
             qWeight[qi]++;
           }
         }
@@ -1015,6 +1016,8 @@ class AestheticSolver {
     for (const cand of diagCandidates) {
       if (diagCount >= maxDiags) break;
       const {r, c, h, qi, ck} = cand;
+      // Re-check at placement time — earlier placements may have blocked this cell
+      if (usedCells.has(ck)) continue;
 
       const dir = h % 2;
       const surrounding = AestheticSolver.countCellEdges(grid, r, c);
@@ -1023,7 +1026,7 @@ class AestheticSolver {
       if (dir === 0) added = tryAdd(r, c, r + 1, c + 1, type);
       else added = tryAdd(r, c + 1, r + 1, c, type);
       if (added) {
-        usedCells.add(ck);
+        markCellAndNeighbors(r, c);
         qWeight[qi]++;
         diagCount++;
       }
@@ -1138,7 +1141,7 @@ class SVGRenderer {
         let nr = nb.r, nc = nb.c;
         let lastType = nb.type;
         visitedEdges.add(ek);
-        chain.push({ r: nr, c: nc, type: lastType });
+        chain.push({ r: nr, c: nc, type: lastType, arcFrom: nb.arcFrom });
 
         // Extend chain through degree-2 nodes, capped at MAX_CHAIN edges
         while (chain.length - 1 < MAX_CHAIN) {
@@ -1156,7 +1159,7 @@ class SVGRenderer {
             cr = nr; cc = nc;
             nr = next.r; nc = next.c;
             lastType = next.type;
-            chain.push({ r: nr, c: nc, type: lastType });
+            chain.push({ r: nr, c: nc, type: lastType, arcFrom: next.arcFrom });
             found = true;
             break;
           }
@@ -1202,10 +1205,30 @@ class SVGRenderer {
           parts.push(`V${cy}`);
         }
       } else if (type === 'ARC') {
+        // Use the canonical arc direction (arcFrom) to ensure the curve always
+        // bends the correct way, regardless of polyline traversal direction.
+        // Forward: departs horizontal, arrives vertical.
+        // Reverse: swap control points to trace the same curve backward.
+        const af = cur.arcFrom;
+        const isForward = af && af.r === prev.r && af.c === prev.c;
         const px = nodeX(prev.c), py = nodeY(prev.r) + yOff;
         const tx = nodeX(cur.c),  ty = nodeY(cur.r) + yOff;
-        const dx = tx - px, dy = ty - py;
-        parts.push(`C${fmt(px + dx*K)} ${fmt(py)} ${fmt(tx)} ${fmt(ty - dy*K)} ${cx} ${cy}`);
+        if (isForward) {
+          const dx = tx - px, dy = ty - py;
+          parts.push(`C${fmt(px + dx*K)} ${fmt(py)} ${fmt(tx)} ${fmt(ty - dy*K)} ${cx} ${cy}`);
+        } else {
+          // Reverse: the original arc was from arcFrom to the other end.
+          // Original control points: CP1=(ox+odx*K, oy), CP2=(otx, oty-ody*K)
+          // Reversed bezier: swap CP1↔CP2 to trace the same curve backward.
+          const ox = af ? nodeX(af.c) : px;
+          const oy = af ? nodeY(af.r) + yOff : py;
+          const otx = af ? (af.r === prev.r && af.c === prev.c ? tx : px) : tx;
+          const oty = af ? (af.r === prev.r && af.c === prev.c ? ty : py) : ty;
+          const odx = otx - ox, ody = oty - oy;
+          // Original CP1 = (ox + odx*K, oy), Original CP2 = (otx, oty - ody*K)
+          // Reversed: CP1' = original CP2, CP2' = original CP1
+          parts.push(`C${fmt(otx)} ${fmt(oty - ody*K)} ${fmt(ox + odx*K)} ${fmt(oy)} ${cx} ${cy}`);
+        }
       } else if (type === 'DIAG') {
         parts.push(`L${cx} ${cy}`);
       }
