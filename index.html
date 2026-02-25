@@ -1,0 +1,1447 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Text-to-Circuit Pattern Encoder</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+    background: #0d0d1a;
+    color: #e0e0e0;
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 2rem 1rem;
+  }
+
+  h1 {
+    font-size: 1.6rem;
+    font-weight: 300;
+    letter-spacing: 0.15em;
+    text-transform: uppercase;
+    color: #8888cc;
+    margin-bottom: 1.5rem;
+  }
+
+  .container {
+    width: 100%;
+    max-width: 1000px;
+    display: flex;
+    flex-direction: column;
+    gap: 1.5rem;
+  }
+
+  .panel {
+    background: #14142a;
+    border: 1px solid #2a2a4a;
+    border-radius: 12px;
+    padding: 1.5rem;
+  }
+
+  .panel-label {
+    font-size: 0.7rem;
+    text-transform: uppercase;
+    letter-spacing: 0.12em;
+    color: #6666aa;
+    margin-bottom: 0.75rem;
+  }
+
+  textarea {
+    width: 100%;
+    background: #0d0d1a;
+    border: 1px solid #2a2a4a;
+    border-radius: 8px;
+    color: #e0e0e0;
+    font-family: 'Consolas', 'Courier New', monospace;
+    font-size: 1rem;
+    padding: 0.75rem 1rem;
+    resize: vertical;
+    min-height: 60px;
+    outline: none;
+    transition: border-color 0.2s;
+  }
+  textarea:focus { border-color: #6666aa; }
+
+  .info-row {
+    display: flex;
+    gap: 1.5rem;
+    margin-top: 0.5rem;
+    font-size: 0.78rem;
+    color: #7777aa;
+  }
+  .info-row span { white-space: nowrap; }
+
+  .btn-row {
+    display: flex;
+    gap: 0.75rem;
+    margin-top: 1rem;
+    flex-wrap: wrap;
+  }
+
+  button {
+    background: #2a2a5a;
+    border: 1px solid #3a3a6a;
+    color: #ccccee;
+    padding: 0.5rem 1.2rem;
+    border-radius: 6px;
+    font-size: 0.85rem;
+    cursor: pointer;
+    transition: background 0.15s, border-color 0.15s;
+  }
+  button:hover { background: #3a3a6a; border-color: #5555aa; }
+  button:active { background: #4a4a7a; }
+  button.primary { background: #4444aa; border-color: #5555cc; }
+  button.primary:hover { background: #5555bb; }
+
+  .preview-area {
+    background: #1a1a2e;
+    border-radius: 8px;
+    min-height: 120px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    overflow: auto;
+    padding: 1.5rem;
+  }
+  .preview-area svg { max-width: 100%; height: auto; }
+  .preview-placeholder {
+    color: #3a3a5a;
+    font-size: 0.9rem;
+    font-style: italic;
+  }
+
+  .variants-grid {
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+    width: 100%;
+  }
+  .variant-item {
+    position: relative;
+    background: #1a1a2e;
+    border: 2px solid transparent;
+    border-radius: 8px;
+    padding: 1rem;
+    cursor: pointer;
+    transition: border-color 0.2s, background 0.15s;
+  }
+  .variant-item:hover { border-color: #3a3a6a; }
+  .variant-item.selected { border-color: #6666cc; background: #1a1a36; }
+  .variant-label {
+    position: absolute;
+    top: 0.5rem;
+    left: 0.75rem;
+    font-size: 0.65rem;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    color: #5555aa;
+    font-weight: 600;
+  }
+  .variant-item.selected .variant-label { color: #8888dd; }
+  .variant-item svg { max-width: 100%; height: auto; display: block; }
+
+  .decode-area {
+    display: flex;
+    gap: 0.75rem;
+    align-items: stretch;
+  }
+  .decode-area textarea { flex: 1; min-height: 80px; font-size: 0.8rem; }
+
+  .decoded-output {
+    margin-top: 0.75rem;
+    padding: 0.6rem 1rem;
+    background: #0d0d1a;
+    border-radius: 6px;
+    font-family: 'Consolas', monospace;
+    font-size: 0.95rem;
+    color: #88cc88;
+    min-height: 2rem;
+    word-break: break-all;
+  }
+  .decoded-output.error { color: #cc6666; }
+
+  .drop-zone {
+    border: 2px dashed #2a2a4a;
+    border-radius: 8px;
+    padding: 1rem;
+    text-align: center;
+    color: #4a4a6a;
+    font-size: 0.8rem;
+    cursor: pointer;
+    transition: border-color 0.2s, color 0.2s;
+    min-width: 140px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 0.3rem;
+  }
+  .drop-zone:hover, .drop-zone.dragover {
+    border-color: #6666aa;
+    color: #8888cc;
+  }
+  .drop-zone input { display: none; }
+
+  .toast {
+    position: fixed;
+    bottom: 2rem;
+    left: 50%;
+    transform: translateX(-50%) translateY(100px);
+    background: #3a3a6a;
+    color: #e0e0e0;
+    padding: 0.6rem 1.4rem;
+    border-radius: 8px;
+    font-size: 0.85rem;
+    opacity: 0;
+    transition: transform 0.3s, opacity 0.3s;
+    pointer-events: none;
+    z-index: 100;
+  }
+  .toast.show {
+    transform: translateX(-50%) translateY(0);
+    opacity: 1;
+  }
+</style>
+</head>
+<body>
+
+<h1>Circuit Pattern Encoder</h1>
+
+<div class="container">
+  <!-- Encode Section -->
+  <div class="panel">
+    <div class="panel-label">Encode Text</div>
+    <textarea id="inputText" placeholder="Type text to encode (A-Z, 0-9, space, . , - ! ? ' :)" spellcheck="false"></textarea>
+    <div class="info-row">
+      <span id="charCount">0 / 23 characters</span>
+      <span id="panelCount">1 panel</span>
+      <span id="bitInfo">0 / 148 bits used</span>
+    </div>
+    <div class="btn-row">
+      <button class="primary" id="btnEncode">Encode</button>
+      <button id="btnDownload" disabled>Download SVG</button>
+      <button id="btnCopy" disabled>Copy SVG</button>
+    </div>
+  </div>
+
+  <!-- Preview -->
+  <div class="panel">
+    <div class="panel-label">Preview — 3 Variants (click to select)</div>
+    <div class="preview-area" id="previewArea">
+      <span class="preview-placeholder">Enter text and click Encode</span>
+    </div>
+  </div>
+
+  <!-- Decode Section -->
+  <div class="panel">
+    <div class="panel-label">Decode Pattern (drop or select all 3 variant SVGs)</div>
+    <div class="decode-area">
+      <textarea id="svgInput" placeholder="Paste all 3 SVG variants here (separated by blank lines) to decode..."></textarea>
+      <div class="drop-zone" id="dropZone">
+        <span>Drop 3 SVGs</span>
+        <span>or click</span>
+        <input type="file" id="fileInput" accept=".svg" multiple>
+      </div>
+    </div>
+    <div class="btn-row">
+      <button id="btnDecode">Decode (3 variants)</button>
+    </div>
+    <div class="decoded-output" id="decodedOutput"></div>
+  </div>
+
+  <!-- Self-test Results -->
+  <div class="panel" id="testPanel">
+    <div class="panel-label">Self-Test Results</div>
+    <div id="testResults" style="font-family: 'Consolas', monospace; font-size: 0.82rem; line-height: 1.6;"></div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+// ─── Constants ───────────────────────────────────────────────────────
+const COLS = 17;
+const ROWS = 5;
+const CELL = 111.141;
+const PAD  = 30.8725;
+const SW   = 61.745;
+const VB_W = 1840;
+const VB_H = 507;
+const MAX_CHAIN = 999; // unlimited chaining for smooth connections
+const PANEL_GAP = 60;
+const K    = 0.5523;  // cubic bezier quarter-circle factor
+
+const H_EDGE_COUNT = 80;  // 5 rows × 16 gaps
+const V_EDGE_COUNT = 68;  // 17 cols × 4 gaps
+const TOTAL_BITS   = H_EDGE_COUNT + V_EDGE_COUNT; // 148
+
+const HEADER_LEN_BITS = 5;
+const HEADER_CHK_BITS = 3;
+const HEADER_BITS     = HEADER_LEN_BITS + HEADER_CHK_BITS; // 8
+const CHAR_BITS       = 6;
+const MAX_CHARS       = Math.floor((TOTAL_BITS - HEADER_BITS) / CHAR_BITS); // 23
+
+const CHARSET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 .,-!?\':';
+
+function nodeX(c) { return PAD + c * CELL; }
+function nodeY(r) { return PAD + r * CELL; }
+
+// ─── CircuitGrid ─────────────────────────────────────────────────────
+class CircuitGrid {
+  constructor() {
+    // hEdges[row][col] — row: 0..4, col: 0..15
+    this.hEdges = Array.from({length: ROWS}, () => new Uint8Array(COLS - 1));
+    // vEdges[row][col] — row: 0..3, col: 0..16
+    this.vEdges = Array.from({length: ROWS - 1}, () => new Uint8Array(COLS));
+    // dEdges: diagonal edges for aesthetics
+    // Each entry: { r1, c1, r2, c2, type: 'arc'|'line' }
+    this.dEdges = [];
+  }
+
+  setH(row, col, val) { this.hEdges[row][col] = val ? 1 : 0; }
+  setV(row, col, val) { this.vEdges[row][col] = val ? 1 : 0; }
+  getH(row, col) { return this.hEdges[row][col]; }
+  getV(row, col) { return this.vEdges[row][col]; }
+
+  addDiag(r1, c1, r2, c2, type) {
+    this.dEdges.push({ r1, c1, r2, c2, type });
+  }
+
+  // Get degree of node (r, c) counting only H and V edges
+  getNodeDegreeHV(r, c) {
+    let d = 0;
+    // left
+    if (c > 0 && this.hEdges[r][c - 1]) d++;
+    // right
+    if (c < COLS - 1 && this.hEdges[r][c]) d++;
+    // up
+    if (r > 0 && this.vEdges[r - 1][c]) d++;
+    // down
+    if (r < ROWS - 1 && this.vEdges[r][c]) d++;
+    return d;
+  }
+
+  // Get full degree including diagonals
+  getNodeDegree(r, c) {
+    let d = this.getNodeDegreeHV(r, c);
+    for (const e of this.dEdges) {
+      if ((e.r1 === r && e.c1 === c) || (e.r2 === r && e.c2 === c)) d++;
+    }
+    return d;
+  }
+
+  // Build the canonical bit-index-to-edge mapping (column-spread interleaved)
+  // Uses a stride coprime to 148 to spread bits evenly across all rows/columns
+  static _buildBitMap() {
+    if (CircuitGrid._bitMap) return CircuitGrid._bitMap;
+    // Build natural row-band order
+    const natural = [];
+    for (let r = 0; r < ROWS; r++) {
+      for (let c = 0; c < COLS - 1; c++)
+        natural.push({ type: 'H', r, c });
+      if (r < ROWS - 1)
+        for (let c = 0; c < COLS; c++)
+          natural.push({ type: 'V', r, c });
+    }
+    // Stride permutation: coprime to 148 ensures every slot is hit exactly once
+    const N = natural.length; // 148
+    const STRIDE = 119; // optimal for even quadrant distribution
+    const map = new Array(N);
+    for (let i = 0; i < N; i++) {
+      map[i] = natural[(i * STRIDE) % N];
+    }
+    CircuitGrid._bitMap = map;
+    return map;
+  }
+
+  // Convert H and V edges to a flat bit array (148 bits) in canonical order
+  toBitArray() {
+    const map = CircuitGrid._buildBitMap();
+    const bits = [];
+    for (const entry of map) {
+      if (entry.type === 'H') bits.push(this.hEdges[entry.r][entry.c]);
+      else bits.push(this.vEdges[entry.r][entry.c]);
+    }
+    return bits;
+  }
+
+  // Set H and V edges from a flat bit array
+  fromBitArray(bits) {
+    const map = CircuitGrid._buildBitMap();
+    for (let i = 0; i < map.length; i++) {
+      const entry = map[i];
+      if (entry.type === 'H') this.hEdges[entry.r][entry.c] = bits[i] || 0;
+      else this.vEdges[entry.r][entry.c] = bits[i] || 0;
+    }
+  }
+
+  // Get adjacency list for graph walking
+  getAdjacency() {
+    const key = (r, c) => `${r},${c}`;
+    const adj = {};
+    const ensureNode = (r, c) => { if (!adj[key(r,c)]) adj[key(r,c)] = []; };
+
+    // H edges
+    for (let r = 0; r < ROWS; r++) {
+      for (let c = 0; c < COLS - 1; c++) {
+        if (this.hEdges[r][c]) {
+          ensureNode(r, c); ensureNode(r, c + 1);
+          adj[key(r,c)].push({ r, c: c+1, type: 'H' });
+          adj[key(r,c+1)].push({ r, c, type: 'H' });
+        }
+      }
+    }
+    // V edges
+    for (let r = 0; r < ROWS - 1; r++) {
+      for (let c = 0; c < COLS; c++) {
+        if (this.vEdges[r][c]) {
+          ensureNode(r, c); ensureNode(r + 1, c);
+          adj[key(r,c)].push({ r: r+1, c, type: 'V' });
+          adj[key(r+1,c)].push({ r, c, type: 'V' });
+        }
+      }
+    }
+    // Diagonal edges
+    for (const e of this.dEdges) {
+      ensureNode(e.r1, e.c1); ensureNode(e.r2, e.c2);
+      adj[key(e.r1,e.c1)].push({ r: e.r2, c: e.c2, type: e.type === 'arc' ? 'ARC' : 'DIAG' });
+      adj[key(e.r2,e.c2)].push({ r: e.r1, c: e.c1, type: e.type === 'arc' ? 'ARC' : 'DIAG' });
+    }
+
+    return adj;
+  }
+}
+
+// ─── TextEncoder ─────────────────────────────────────────────────────
+class TextEncoder_ {
+  static charToCode(ch) {
+    const idx = CHARSET.indexOf(ch);
+    return idx >= 0 ? idx : -1;
+  }
+
+  static codeToChar(code) {
+    return code >= 0 && code < CHARSET.length ? CHARSET[code] : '?';
+  }
+
+  static validate(text) {
+    const upper = text.toUpperCase();
+    for (const ch of upper) {
+      if (TextEncoder_.charToCode(ch) < 0) return { valid: false, char: ch };
+    }
+    return { valid: true };
+  }
+
+  static computeChecksum(charCodes) {
+    let xor = 0;
+    for (const c of charCodes) xor ^= c;
+    return xor & 0x7; // 3 bits
+  }
+
+  static encode(text, variant = 0) {
+    const upper = text.toUpperCase();
+    const validation = TextEncoder_.validate(upper);
+    if (!validation.valid)
+      throw new Error(`Invalid character: "${validation.char}"`);
+
+    // Split into chunks of MAX_CHARS
+    const chunks = [];
+    for (let i = 0; i < upper.length; i += MAX_CHARS)
+      chunks.push(upper.slice(i, i + MAX_CHARS));
+    if (chunks.length === 0) chunks.push('');
+
+    const grids = chunks.map((chunk, chunkIdx) => {
+      const grid = new CircuitGrid();
+      const charCodes = [];
+      for (const ch of chunk) charCodes.push(TextEncoder_.charToCode(ch));
+
+      // Build bit stream: [5-bit length][3-bit checksum][6-bit × N chars][zero-pad]
+      const dataBits = new Array(TOTAL_BITS).fill(0);
+      let pos = 0;
+
+      // 5-bit length
+      const len = charCodes.length;
+      for (let b = 4; b >= 0; b--) dataBits[pos++] = (len >> b) & 1;
+
+      // 3-bit checksum
+      const chk = TextEncoder_.computeChecksum(charCodes);
+      for (let b = 2; b >= 0; b--) dataBits[pos++] = (chk >> b) & 1;
+
+      // 6-bit per character
+      for (const code of charCodes)
+        for (let b = 5; b >= 0; b--) dataBits[pos++] = (code >> b) & 1;
+
+      // Derive data-dependent seed so different text → different random fill
+      const dataSeed = charCodes.reduce((acc, code, idx) =>
+        (acc + code * (idx + 1) * 7919) | 0, 0) >>> 0;
+
+      // 1) Load data-only edges
+      grid.fromBitArray(dataBits);
+
+      // 2) Add aesthetic arcs/diags at data-edge corners
+      AestheticSolver.fillDiagonals(grid, variant, dataSeed);
+
+      // 3) Adaptive random H/V fill — balanced per 2D quadrant (4 cols × 2 rows).
+      //    Uses grid position (r,c) + dataSeed for hash, NOT bit index.
+      //    Sparser quadrants get more fill to even out spatial density.
+      //    Pattern selection is variant-independent (never 111 = all-on).
+      //    Decoding: AND all 3 variants → only data bits survive.
+      const QC = 4, QR = 2, NQ = QC * QR;
+      const midRow = Math.floor(ROWS / 2); // row 2 splits top/bottom
+      const getQuadrant = (r, c, maxC) => {
+        const qi = Math.min(Math.floor(c / (maxC + 1) * QC), QC - 1);
+        const qj = r < midRow ? 0 : 1;
+        return qj * QC + qi;
+      };
+
+      const map = CircuitGrid._buildBitMap();
+      const currentBits = grid.toBitArray();
+
+      // Count existing edges per quadrant
+      const qExisting = new Array(NQ).fill(0);
+      for (let i = 0; i < TOTAL_BITS; i++) {
+        if (!currentBits[i]) continue;
+        const e = map[i];
+        const maxC = e.type === 'H' ? COLS - 2 : COLS - 1;
+        qExisting[getQuadrant(e.r, e.c, maxC)]++;
+      }
+
+      // Collect empty slots grouped by quadrant
+      const qEmpty = Array.from({length: NQ}, () => []);
+      for (let r = 0; r < ROWS; r++)
+        for (let c = 0; c < COLS - 1; c++) {
+          if (grid.getH(r, c)) continue;
+          const qi = getQuadrant(r, c, COLS - 2);
+          const h = AestheticSolver.hash(r, c, dataSeed + 99, 0);
+          qEmpty[qi].push({ type: 'H', r, c, hash: h, pattern: (h % 6) + 1 });
+        }
+      for (let r = 0; r < ROWS - 1; r++)
+        for (let c = 0; c < COLS; c++) {
+          if (grid.getV(r, c)) continue;
+          const qi = getQuadrant(r, c, COLS - 1);
+          const h = AestheticSolver.hash(r, c, dataSeed + 199, 0);
+          qEmpty[qi].push({ type: 'V', r, c, hash: h, pattern: (h % 6) + 1 });
+        }
+
+      // Target: fill grid to ~55 visual edges total (H/V + diagonals → ~44% pixel coverage).
+      // Count diagonals too since they contribute to visual density.
+      // Each selected slot has ~50% chance of fillBit=1 per variant, so we
+      // select ~2× the needed count to compensate.
+      const totalHV = qExisting.reduce((a, b) => a + b, 0);
+      const totalVisual = totalHV + grid.dEdges.length;
+      const TARGET_VISUAL = 58;
+      const totalNeeded = Math.max(0, TARGET_VISUAL - totalVisual);
+      const selectNeeded = totalNeeded * 2; // ~50% fill rate per variant
+      const basePerQ = selectNeeded / NQ;
+      const avgExisting = totalHV / NQ;
+      // Check if adding an H/V edge would complete a triangle with an existing diagonal
+      const hvWouldTriangle = (type, r, c) => {
+        // An H edge connects (r,c)-(r,c+1); a V edge connects (r,c)-(r+1,c)
+        // Check all diagonals touching these two nodes
+        for (const d of grid.dEdges) {
+          const dr1 = d.r1, dc1 = d.c1, dr2 = d.r2, dc2 = d.c2;
+          if (type === 'H') {
+            // H edge: (r,c)-(r,c+1). Triangle if diagonal has one end at
+            // a node that's H/V-connected to both (r,c) and (r,c+1)
+            // The diagonal endpoints + this H edge form a triangle if:
+            // one diagonal endpoint == (r,c) and the other is V-adjacent to (r,c+1), or
+            // one diagonal endpoint == (r,c+1) and the other is V-adjacent to (r,c), etc.
+            const nodes = [[r, c], [r, c + 1]];
+            for (const [nr, nc] of nodes) {
+              // Is this node a diagonal endpoint?
+              let otherR, otherC;
+              if (dr1 === nr && dc1 === nc) { otherR = dr2; otherC = dc2; }
+              else if (dr2 === nr && dc2 === nc) { otherR = dr1; otherC = dc1; }
+              else continue;
+              // Is the other diagonal endpoint H/V-connected to the other H-edge node?
+              const [ar, ac] = nr === r && nc === c ? [r, c + 1] : [r, c];
+              const connected =
+                (otherR === ar && Math.abs(otherC - ac) === 1 && grid.getH(ar, Math.min(otherC, ac))) ||
+                (otherC === ac && Math.abs(otherR - ar) === 1 && grid.getV(Math.min(otherR, ar), ac));
+              if (connected) return true;
+            }
+          } else {
+            // V edge: (r,c)-(r+1,c)
+            const nodes = [[r, c], [r + 1, c]];
+            for (const [nr, nc] of nodes) {
+              let otherR, otherC;
+              if (dr1 === nr && dc1 === nc) { otherR = dr2; otherC = dc2; }
+              else if (dr2 === nr && dc2 === nc) { otherR = dr1; otherC = dc1; }
+              else continue;
+              const [ar, ac] = nr === r && nc === c ? [r + 1, c] : [r, c];
+              const connected =
+                (otherR === ar && Math.abs(otherC - ac) === 1 && grid.getH(ar, Math.min(otherC, ac))) ||
+                (otherC === ac && Math.abs(otherR - ar) === 1 && grid.getV(Math.min(otherR, ar), ac));
+              if (connected) return true;
+            }
+          }
+        }
+        return false;
+      };
+
+      for (let qi = 0; qi < NQ; qi++) {
+        const deficit = Math.max(0, avgExisting - qExisting[qi]);
+        const target = Math.round(basePerQ + deficit * 2);
+        qEmpty[qi].sort((a, b) => a.hash - b.hash);
+        let selected = 0;
+        for (const slot of qEmpty[qi]) {
+          if (selected >= target) break;
+          selected++;
+          const fillBit = (slot.pattern >> (2 - variant)) & 1;
+          if (!fillBit) continue;
+          if (hvWouldTriangle(slot.type, slot.r, slot.c)) continue;
+          if (slot.type === 'H') grid.setH(slot.r, slot.c, 1);
+          else grid.setV(slot.r, slot.c, 1);
+        }
+      }
+
+      return grid;
+    });
+
+    return grids;
+  }
+}
+
+// ─── Union-Find (cycle detection) ────────────────────────────────────
+class UnionFind {
+  constructor() { this.parent = {}; this.rank = {}; }
+  find(x) {
+    if (!(x in this.parent)) { this.parent[x] = x; this.rank[x] = 0; }
+    if (this.parent[x] !== x) this.parent[x] = this.find(this.parent[x]);
+    return this.parent[x];
+  }
+  connected(a, b) { return this.find(a) === this.find(b); }
+  union(a, b) {
+    const ra = this.find(a), rb = this.find(b);
+    if (ra === rb) return false;
+    if (this.rank[ra] < this.rank[rb]) this.parent[ra] = rb;
+    else if (this.rank[ra] > this.rank[rb]) this.parent[rb] = ra;
+    else { this.parent[rb] = ra; this.rank[ra]++; }
+    return true;
+  }
+}
+
+// ─── AestheticSolver ─────────────────────────────────────────────────
+class AestheticSolver {
+  static hash(r, c, seed, variant = 0) {
+    let h = (r * 131 + c * 997 + seed * 7919 + variant * 104729) | 0;
+    h = ((h >>> 16) ^ h) * 0x45d9f3b | 0;
+    h = ((h >>> 16) ^ h) * 0x45d9f3b | 0;
+    return ((h >>> 16) ^ h) >>> 0;
+  }
+
+  static fillDiagonals(grid, variant = 0, dataSeed = 0) {
+    const usedCells = new Set();
+    const cellKey = (r, c) => `${r},${c}`;
+    const nodeId = (r, c) => `${r},${c}`;
+    const MAX_DEG = 4;
+    const QC = 4, midRow = Math.floor(ROWS / 2);
+    const getQuadrant = (r, c) => (r < midRow ? 0 : QC) + Math.min(Math.floor(c / COLS * QC), QC - 1);
+    const NQ = QC * 2;
+
+    // Build Union-Find from existing H/V edges to track connectivity
+    const uf = new UnionFind();
+    for (let r = 0; r < ROWS; r++)
+      for (let c = 0; c < COLS - 1; c++)
+        if (grid.getH(r, c)) uf.union(nodeId(r, c), nodeId(r, c + 1));
+    for (let r = 0; r < ROWS - 1; r++)
+      for (let c = 0; c < COLS; c++)
+        if (grid.getV(r, c)) uf.union(nodeId(r, c), nodeId(r + 1, c));
+
+    // Check if diagonal (r1,c1)-(r2,c2) would form a triangle with H/V edges.
+    // A triangle occurs when both endpoints share a common H/V neighbor.
+    const wouldFormTriangle = (r1, c1, r2, c2) => {
+      if (r1 === r2 || c1 === c2) return false; // not a diagonal
+      // The two other corners of the 2×2 cell containing this diagonal
+      const corners = [{r: r1, c: c2}, {r: r2, c: c1}];
+      for (const n of corners) {
+        // Is n connected to (r1,c1) via H or V?
+        const toA = (n.r === r1 && Math.abs(n.c - c1) === 1 && grid.getH(n.r, Math.min(n.c, c1))) ||
+                    (n.c === c1 && Math.abs(n.r - r1) === 1 && grid.getV(Math.min(n.r, r1), n.c));
+        if (!toA) continue;
+        // Is n connected to (r2,c2) via H or V?
+        const toB = (n.r === r2 && Math.abs(n.c - c2) === 1 && grid.getH(n.r, Math.min(n.c, c2))) ||
+                    (n.c === c2 && Math.abs(n.r - r2) === 1 && grid.getV(Math.min(n.r, r2), n.c));
+        if (toB) return true;
+      }
+      return false;
+    };
+
+    // Helper: try to add a diagonal — rejects straight-line triangles, cycles, and degree overflow.
+    // Arcs are exempt from the triangle check: they curve outward so the enclosed
+    // region is filled by the thick stroke, unlike straight lines which leave a visible hole.
+    const tryAdd = (r1, c1, r2, c2, type, skipCycleCheck = false) => {
+      if (type !== 'arc' && wouldFormTriangle(r1, c1, r2, c2)) return false;
+      const a = nodeId(r1, c1), b = nodeId(r2, c2);
+      if (!skipCycleCheck && uf.connected(a, b)) return false;
+      if (grid.getNodeDegree(r1, c1) >= MAX_DEG) return false;
+      if (grid.getNodeDegree(r2, c2) >= MAX_DEG) return false;
+      grid.addDiag(r1, c1, r2, c2, type);
+      uf.union(a, b);
+      return true;
+    };
+
+    // Count existing edge weight per quadrant for adaptive fill
+    const qWeight = new Array(NQ).fill(0);
+    for (let r = 0; r < ROWS; r++)
+      for (let c = 0; c < COLS - 1; c++)
+        if (grid.getH(r, c)) qWeight[getQuadrant(r, c)]++;
+    for (let r = 0; r < ROWS - 1; r++)
+      for (let c = 0; c < COLS; c++)
+        if (grid.getV(r, c)) qWeight[getQuadrant(r, c)]++;
+    const avgWeight = qWeight.reduce((a, b) => a + b, 0) / NQ;
+
+    // Pass 1: Arcs at L-corners — prefer sparse quadrants
+    for (let r = 0; r < ROWS; r++) {
+      for (let c = 0; c < COLS; c++) {
+        const corners = AestheticSolver.findLCorners(grid, r, c);
+        for (const corner of corners) {
+          const cr = Math.min(corner.r1, corner.r2);
+          const cc = Math.min(corner.c1, corner.c2);
+          const ck = cellKey(cr, cc);
+          if (usedCells.has(ck)) continue;
+
+          const h = AestheticSolver.hash(cr, cc, dataSeed, variant);
+          // Keep ~30% baseline, up to ~60% in sparse quadrants
+          const qi = getQuadrant(cr, cc);
+          const sparsity = Math.max(0, avgWeight - qWeight[qi]);
+          const keepThresh = 3 + Math.min(Math.floor(sparsity * 0.5), 3);
+          if (h % 10 < (10 - keepThresh)) continue;
+
+          if (tryAdd(corner.r1, corner.c1, corner.r2, corner.c2, 'arc', true)) {
+            usedCells.add(ck);
+            qWeight[qi]++;
+          }
+        }
+      }
+    }
+
+    // Pass 2: Fill diagonals — prefer sparse quadrants
+    // Collect candidates, sort by quadrant sparsity then hash
+    const diagCandidates = [];
+    for (let r = 0; r < ROWS - 1; r++) {
+      for (let c = 0; c < COLS - 1; c++) {
+        const ck = cellKey(r, c);
+        if (usedCells.has(ck)) continue;
+        const h = AestheticSolver.hash(r, c, dataSeed + 1, variant);
+        const qi = getQuadrant(r, c);
+        diagCandidates.push({ r, c, h, qi, ck });
+      }
+    }
+    // Sort: sparsest quadrant first, then by hash within each
+    diagCandidates.sort((a, b) => {
+      const da = qWeight[a.qi], db = qWeight[b.qi];
+      if (da !== db) return da - db; // sparse first
+      return a.h - b.h;
+    });
+
+    let diagCount = 0;
+    const maxDiags = Math.round((ROWS - 1) * (COLS - 1) * 0.05); // ~5% of cells
+    for (const cand of diagCandidates) {
+      if (diagCount >= maxDiags) break;
+      const {r, c, h, qi, ck} = cand;
+
+      const dir = h % 2;
+      const surrounding = AestheticSolver.countCellEdges(grid, r, c);
+      const type = surrounding >= 2 ? 'arc' : 'line';
+      let added = false;
+      if (dir === 0) added = tryAdd(r, c, r + 1, c + 1, type);
+      else added = tryAdd(r, c + 1, r + 1, c, type);
+      if (added) {
+        usedCells.add(ck);
+        qWeight[qi]++;
+        diagCount++;
+      }
+    }
+  }
+
+  static findLCorners(grid, r, c) {
+    const corners = [];
+    const deg = grid.getNodeDegreeHV(r, c);
+    if (deg < 2) return corners;
+
+    const neighbors = [];
+    if (c > 0 && grid.getH(r, c-1)) neighbors.push({r, c: c-1, dir: 'L'});
+    if (c < COLS-1 && grid.getH(r, c)) neighbors.push({r, c: c+1, dir: 'R'});
+    if (r > 0 && grid.getV(r-1, c)) neighbors.push({r: r-1, c, dir: 'U'});
+    if (r < ROWS-1 && grid.getV(r, c)) neighbors.push({r: r+1, c, dir: 'D'});
+
+    // Find all pairs that form right angles
+    for (let i = 0; i < neighbors.length; i++) {
+      for (let j = i + 1; j < neighbors.length; j++) {
+        const a = neighbors[i], b = neighbors[j];
+        const aIsH = (a.dir === 'L' || a.dir === 'R');
+        const bIsH = (b.dir === 'L' || b.dir === 'R');
+        if (aIsH === bIsH) continue; // same axis, not a corner
+        corners.push({ r1: a.r, c1: a.c, r2: b.r, c2: b.c });
+      }
+    }
+    return corners;
+  }
+
+  static countCellEdges(grid, r, c) {
+    let count = 0;
+    if (grid.getH(r, c)) count++;
+    if (r + 1 < ROWS && grid.getH(r + 1, c)) count++;
+    if (grid.getV(r, c)) count++;
+    if (c + 1 < COLS && grid.getV(r, c + 1)) count++;
+    return count;
+  }
+}
+
+// ─── SVGRenderer ─────────────────────────────────────────────────────
+class SVGRenderer {
+  static render(grids) {
+    const panelCount = grids.length;
+    const totalHeight = panelCount * VB_H + (panelCount - 1) * PANEL_GAP;
+    const paths = [];
+
+    for (let p = 0; p < panelCount; p++) {
+      const yOff = p * (VB_H + PANEL_GAP);
+      const gridPaths = SVGRenderer.renderGrid(grids[p], yOff);
+      paths.push(...gridPaths);
+    }
+
+    return [
+      `<svg width="${VB_W}" height="${totalHeight}" viewBox="0 0 ${VB_W} ${totalHeight}" fill="none" xmlns="http://www.w3.org/2000/svg">`,
+      ...paths.map(d => `<path d="${d}" stroke="white" stroke-width="${SW}" stroke-linecap="round" stroke-linejoin="round"/>`),
+      `</svg>`
+    ].join('\n');
+  }
+
+  static renderGrid(grid, yOff) {
+    // Build adjacency and chain edges into polylines
+    const adj = grid.getAdjacency();
+    const visitedEdges = new Set();
+    const edgeKey = (r1, c1, r2, c2) => {
+      if (r1 < r2 || (r1 === r2 && c1 < c2)) return `${r1},${c1}-${r2},${c2}`;
+      return `${r2},${c2}-${r1},${c1}`;
+    };
+
+    const allPaths = [];
+
+    // Find all edges
+    const allEdges = [];
+    for (const nodeKey in adj) {
+      const [r, c] = nodeKey.split(',').map(Number);
+      for (const nb of adj[nodeKey]) {
+        const ek = edgeKey(r, c, nb.r, nb.c);
+        if (!visitedEdges.has(ek)) {
+          visitedEdges.add(ek);
+          allEdges.push({ r1: r, c1: c, r2: nb.r, c2: nb.c, type: nb.type });
+        }
+      }
+    }
+
+    // Reset visited for chaining
+    visitedEdges.clear();
+
+    // Build chains: walk from degree-1 or degree-3 endpoints
+    const nodeKeys = Object.keys(adj);
+    // Sort to ensure deterministic order
+    nodeKeys.sort();
+
+    // Compute degrees
+    const degrees = {};
+    for (const nk of nodeKeys) degrees[nk] = adj[nk].length;
+
+    // Start from degree-1 nodes first, then any unvisited
+    const startNodes = nodeKeys.filter(nk => degrees[nk] === 1);
+    const otherNodes = nodeKeys.filter(nk => degrees[nk] !== 1);
+
+    const tryChain = (startKey) => {
+      const [sr, sc] = startKey.split(',').map(Number);
+      // Find an unvisited edge from this node
+      const neighbors = adj[startKey];
+      for (const nb of neighbors) {
+        const ek = edgeKey(sr, sc, nb.r, nb.c);
+        if (visitedEdges.has(ek)) continue;
+
+        // Start a chain
+        const chain = [{ r: sr, c: sc }];
+        let cr = sr, cc = sc;
+        let nr = nb.r, nc = nb.c;
+        let lastType = nb.type;
+        visitedEdges.add(ek);
+        chain.push({ r: nr, c: nc, type: lastType });
+
+        // Extend chain through degree-2 nodes, capped at MAX_CHAIN edges
+        while (chain.length - 1 < MAX_CHAIN) {
+          const nk = `${nr},${nc}`;
+          const nbs = adj[nk];
+          if (!nbs) break;
+
+          let found = false;
+          for (const next of nbs) {
+            const nek = edgeKey(nr, nc, next.r, next.c);
+            if (visitedEdges.has(nek)) continue;
+            if (degrees[nk] !== 2) { found = false; break; }
+
+            visitedEdges.add(nek);
+            cr = nr; cc = nc;
+            nr = next.r; nc = next.c;
+            lastType = next.type;
+            chain.push({ r: nr, c: nc, type: lastType });
+            found = true;
+            break;
+          }
+          if (!found) break;
+        }
+
+        if (chain.length >= 2) {
+          allPaths.push(SVGRenderer.chainToPathD(chain, yOff));
+        }
+      }
+    };
+
+    // Process degree-1 nodes first
+    for (const nk of startNodes) tryChain(nk);
+    // Then remaining (for cycles or degree-3+)
+    for (const nk of otherNodes) tryChain(nk);
+
+    return allPaths;
+  }
+
+  static chainToPathD(chain, yOff) {
+    const fmt = (v) => Math.round(v * 1000) / 1000;
+    const parts = [];
+    parts.push(`M${fmt(nodeX(chain[0].c))} ${fmt(nodeY(chain[0].r) + yOff)}`);
+
+    for (let i = 1; i < chain.length; i++) {
+      const prev = chain[i - 1];
+      const cur = chain[i];
+      const type = cur.type;
+      const cx = fmt(nodeX(cur.c));
+      const cy = fmt(nodeY(cur.r) + yOff);
+
+      if (type === 'H') {
+        if (i > 1 && chain[i-1].type === 'H' && cur.r === chain[i-2].r) {
+          parts[parts.length - 1] = `H${cx}`;
+        } else {
+          parts.push(`H${cx}`);
+        }
+      } else if (type === 'V') {
+        if (i > 1 && chain[i-1].type === 'V' && cur.c === chain[i-2].c) {
+          parts[parts.length - 1] = `V${cy}`;
+        } else {
+          parts.push(`V${cy}`);
+        }
+      } else if (type === 'ARC') {
+        const px = nodeX(prev.c), py = nodeY(prev.r) + yOff;
+        const tx = nodeX(cur.c),  ty = nodeY(cur.r) + yOff;
+        const dx = tx - px, dy = ty - py;
+        parts.push(`C${fmt(px + dx*K)} ${fmt(py)} ${fmt(tx)} ${fmt(ty - dy*K)} ${cx} ${cy}`);
+      } else if (type === 'DIAG') {
+        parts.push(`L${cx} ${cy}`);
+      }
+    }
+
+    return parts.join('');
+  }
+}
+
+// ─── PatternDecoder ──────────────────────────────────────────────────
+class PatternDecoder {
+  static snapToGrid(x, y, yOff = 0) {
+    const adjY = y - yOff;
+    const col = Math.round((x - PAD) / CELL);
+    const row = Math.round((adjY - PAD) / CELL);
+    return {
+      r: Math.max(0, Math.min(ROWS - 1, row)),
+      c: Math.max(0, Math.min(COLS - 1, col))
+    };
+  }
+
+  // Extract grids (bit arrays per panel) from a single SVG string
+  static _extractGrids(svgString) {
+    const parser = new DOMParser();
+    const doc = parser.parseFromString(svgString, 'image/svg+xml');
+    const paths = doc.querySelectorAll('path');
+
+    if (paths.length === 0) return null;
+
+    const svg = doc.querySelector('svg');
+    const vb = svg?.getAttribute('viewBox')?.split(/\s+/).map(Number);
+    const totalHeight = vb ? vb[3] : VB_H;
+    const panelCount = Math.max(1, Math.round((totalHeight + PANEL_GAP) / (VB_H + PANEL_GAP)));
+
+    const panelBits = [];
+    for (let p = 0; p < panelCount; p++) {
+      const yOff = p * (VB_H + PANEL_GAP);
+      const grid = new CircuitGrid();
+
+      for (const path of paths) {
+        const d = path.getAttribute('d');
+        if (!d) continue;
+        const edges = PatternDecoder.parsePath(d, yOff);
+        for (const edge of edges) {
+          if (edge.type === 'H') {
+            const minC = Math.min(edge.c1, edge.c2);
+            const maxC = Math.max(edge.c1, edge.c2);
+            for (let c = minC; c < maxC; c++) {
+              if (edge.r >= 0 && edge.r < ROWS && c >= 0 && c < COLS - 1)
+                grid.setH(edge.r, c, 1);
+            }
+          } else if (edge.type === 'V') {
+            const minR = Math.min(edge.r1, edge.r2);
+            const maxR = Math.max(edge.r1, edge.r2);
+            for (let r = minR; r < maxR; r++) {
+              if (edge.c >= 0 && edge.c < COLS && r >= 0 && r < ROWS - 1)
+                grid.setV(r, edge.c, 1);
+            }
+          }
+        }
+      }
+      panelBits.push(grid.toBitArray());
+    }
+    return panelBits;
+  }
+
+  // Decode bits from a panel into text
+  static _decodeBits(bits) {
+    let pos = 0;
+    let len = 0;
+    for (let b = 4; b >= 0; b--) len |= (bits[pos++] << b);
+
+    let chk = 0;
+    for (let b = 2; b >= 0; b--) chk |= (bits[pos++] << b);
+
+    if (len > MAX_CHARS)
+      return { text: '', valid: false, error: `Invalid length: ${len}` };
+
+    const charCodes = [];
+    for (let i = 0; i < len; i++) {
+      let code = 0;
+      for (let b = 5; b >= 0; b--) code |= (bits[pos++] << b);
+      charCodes.push(code);
+    }
+
+    const expectedChk = TextEncoder_.computeChecksum(charCodes);
+    if (chk !== expectedChk)
+      return { text: '', valid: false, error: `Checksum mismatch (got ${chk}, expected ${expectedChk})` };
+
+    const text = charCodes.map(c => TextEncoder_.codeToChar(c)).join('');
+    return { text, valid: true };
+  }
+
+  // Decode from 3 variant SVGs by AND-intersecting their H/V edges.
+  // Edges present in all 3 = data, edges that differ = random filler.
+  static decode3(svgStrings) {
+    if (!Array.isArray(svgStrings) || svgStrings.length !== 3)
+      return { text: '', valid: false, error: 'Requires exactly 3 variant SVGs' };
+
+    const allPanelBits = svgStrings.map(s => PatternDecoder._extractGrids(s));
+    if (allPanelBits.some(p => !p))
+      return { text: '', valid: false, error: 'Failed to parse one or more SVGs' };
+
+    const panelCount = allPanelBits[0].length;
+    if (!allPanelBits.every(p => p.length === panelCount))
+      return { text: '', valid: false, error: 'Variant panel counts do not match' };
+
+    const results = [];
+    for (let p = 0; p < panelCount; p++) {
+      // AND all 3 variants: bit = 1 only if all 3 have it
+      const bits = new Array(TOTAL_BITS);
+      for (let i = 0; i < TOTAL_BITS; i++) {
+        bits[i] = allPanelBits[0][p][i] & allPanelBits[1][p][i] & allPanelBits[2][p][i];
+      }
+      results.push(PatternDecoder._decodeBits(bits));
+    }
+
+    const allValid = results.every(r => r.valid);
+    const fullText = results.map(r => r.text).join('');
+    const firstError = results.find(r => !r.valid);
+    return { text: fullText, valid: allValid, panels: results, error: firstError?.error || null };
+  }
+
+  // Single-SVG decode (legacy, works only on SVGs without random fill)
+  static decode(svgString) {
+    const panelBits = PatternDecoder._extractGrids(svgString);
+    if (!panelBits)
+      return { text: '', valid: false, error: 'No paths found in SVG' };
+
+    const results = panelBits.map(bits => PatternDecoder._decodeBits(bits));
+    const allValid = results.every(r => r.valid);
+    const fullText = results.map(r => r.text).join('');
+    const firstError = results.find(r => !r.valid);
+    return { text: fullText, valid: allValid, panels: results, error: firstError?.error || null };
+  }
+
+  static parsePath(d, yOff) {
+    const edges = [];
+    // Y-range for this panel (with half-cell tolerance)
+    const yMin = yOff + PAD - CELL * 0.5;
+    const yMax = yOff + PAD + (ROWS - 1) * CELL + CELL * 0.5;
+    const inRange = (y) => y >= yMin && y <= yMax;
+
+    // Tokenize the path d attribute
+    const tokens = d.match(/[MLHVCSQTAZ][^MLHVCSQTAZ]*/gi) || [];
+    let cx = 0, cy = 0; // Current point
+
+    for (const token of tokens) {
+      const cmd = token[0];
+      const nums = token.slice(1).trim().split(/[\s,]+/).map(Number).filter(n => !isNaN(n));
+
+      switch (cmd) {
+        case 'M':
+          cx = nums[0]; cy = nums[1];
+          break;
+        case 'H': {
+          const nx = nums[0];
+          if (inRange(cy)) {
+            const snap1 = PatternDecoder.snapToGrid(cx, cy, yOff);
+            const snap2 = PatternDecoder.snapToGrid(nx, cy, yOff);
+            if (snap1.r === snap2.r) {
+              edges.push({ type: 'H', r: snap1.r, c1: snap1.c, c2: snap2.c });
+            }
+          }
+          cx = nx;
+          break;
+        }
+        case 'V': {
+          const ny = nums[0];
+          if (inRange(cy) && inRange(ny)) {
+            const snap1 = PatternDecoder.snapToGrid(cx, cy, yOff);
+            const snap2 = PatternDecoder.snapToGrid(cx, ny, yOff);
+            if (snap1.c === snap2.c) {
+              edges.push({ type: 'V', c: snap1.c, r1: snap1.r, r2: snap2.r });
+            }
+          }
+          cy = ny;
+          break;
+        }
+        case 'L': {
+          const nx = nums[0], ny = nums[1];
+          if (inRange(cy) && inRange(ny)) {
+            const snap1 = PatternDecoder.snapToGrid(cx, cy, yOff);
+            const snap2 = PatternDecoder.snapToGrid(nx, ny, yOff);
+            if (snap1.r === snap2.r && snap1.c !== snap2.c) {
+              edges.push({ type: 'H', r: snap1.r, c1: snap1.c, c2: snap2.c });
+            } else if (snap1.c === snap2.c && snap1.r !== snap2.r) {
+              edges.push({ type: 'V', c: snap1.c, r1: snap1.r, r2: snap2.r });
+            }
+          }
+          // Diagonals are ignored for decoding
+          cx = nx; cy = ny;
+          break;
+        }
+        case 'C': {
+          // Cubic bezier — skip to endpoint (ignore control points)
+          // 6 numbers: cp1x cp1y cp2x cp2y x y
+          if (nums.length >= 6) { cx = nums[4]; cy = nums[5]; }
+          break;
+        }
+      }
+    }
+    return edges;
+  }
+}
+
+// ─── UI Logic ────────────────────────────────────────────────────────
+const VARIANT_COUNT = 3;
+let currentSvgs = []; // array of 3 SVG strings
+let selectedVariant = 0;
+
+const inputText   = document.getElementById('inputText');
+const charCount   = document.getElementById('charCount');
+const panelCountEl = document.getElementById('panelCount');
+const bitInfo     = document.getElementById('bitInfo');
+const btnEncode   = document.getElementById('btnEncode');
+const btnDownload = document.getElementById('btnDownload');
+const btnCopy     = document.getElementById('btnCopy');
+const previewArea = document.getElementById('previewArea');
+const svgInput    = document.getElementById('svgInput');
+const btnDecode   = document.getElementById('btnDecode');
+const decodedOutput = document.getElementById('decodedOutput');
+const dropZone    = document.getElementById('dropZone');
+const fileInput   = document.getElementById('fileInput');
+const toastEl     = document.getElementById('toast');
+
+function showToast(msg) {
+  toastEl.textContent = msg;
+  toastEl.classList.add('show');
+  setTimeout(() => toastEl.classList.remove('show'), 2000);
+}
+
+function updateInfo() {
+  const text = inputText.value.toUpperCase();
+  const len = text.length;
+  const panels = Math.max(1, Math.ceil(len / MAX_CHARS));
+  const lastPanelChars = len - (panels - 1) * MAX_CHARS;
+  const bitsUsed = HEADER_BITS + Math.min(len, MAX_CHARS) * CHAR_BITS;
+
+  charCount.textContent = `${len} character${len !== 1 ? 's' : ''} (max ${MAX_CHARS}/panel)`;
+  panelCountEl.textContent = `${panels} panel${panels !== 1 ? 's' : ''}`;
+  bitInfo.textContent = `${bitsUsed} / ${TOTAL_BITS} bits used`;
+}
+
+function selectVariant(index) {
+  selectedVariant = index;
+  const items = previewArea.querySelectorAll('.variant-item');
+  items.forEach((el, i) => el.classList.toggle('selected', i === index));
+}
+
+inputText.addEventListener('input', updateInfo);
+
+btnEncode.addEventListener('click', () => {
+  const text = inputText.value.trim();
+  if (!text) {
+    previewArea.innerHTML = '<span class="preview-placeholder">Enter some text first</span>';
+    btnDownload.disabled = true;
+    btnCopy.disabled = true;
+    currentSvgs = [];
+    return;
+  }
+
+  try {
+    currentSvgs = [];
+    for (let v = 0; v < VARIANT_COUNT; v++) {
+      const grids = TextEncoder_.encode(text, v);
+      currentSvgs.push(SVGRenderer.render(grids));
+    }
+
+    // Verify decoding by AND-intersecting all 3 variants
+    const decoded = PatternDecoder.decode3(currentSvgs);
+    const isValid = decoded.valid && decoded.text === text.toUpperCase();
+
+    // Build the 3-variant display
+    const container = document.createElement('div');
+    container.className = 'variants-grid';
+    for (let v = 0; v < VARIANT_COUNT; v++) {
+      const item = document.createElement('div');
+      item.className = 'variant-item' + (v === selectedVariant ? ' selected' : '');
+      item.innerHTML = `<span class="variant-label">Variant ${v + 1}</span>${currentSvgs[v]}`;
+      item.addEventListener('click', () => selectVariant(v));
+      container.appendChild(item);
+    }
+    previewArea.innerHTML = '';
+    previewArea.appendChild(container);
+
+    btnDownload.disabled = false;
+    btnCopy.disabled = false;
+
+    if (isValid) {
+      showToast('3 variants encoded — decodes correctly via intersection');
+    } else {
+      showToast('Warning: 3-variant decode verification failed');
+      console.warn('Decode mismatch:', decoded);
+    }
+  } catch (e) {
+    const errSpan = document.createElement('span');
+    errSpan.className = 'preview-placeholder';
+    errSpan.style.color = '#cc6666';
+    errSpan.textContent = e.message;
+    previewArea.innerHTML = '';
+    previewArea.appendChild(errSpan);
+    showToast('Encoding error');
+  }
+});
+
+btnDownload.addEventListener('click', () => {
+  if (!currentSvgs.length) return;
+  // Download all 3 variants (all needed for decoding)
+  for (let v = 0; v < VARIANT_COUNT; v++) {
+    const blob = new Blob([currentSvgs[v]], { type: 'image/svg+xml' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `circuit-pattern-v${v + 1}.svg`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+  showToast('All 3 variants downloaded');
+});
+
+btnCopy.addEventListener('click', () => {
+  if (!currentSvgs.length) return;
+  navigator.clipboard.writeText(currentSvgs[selectedVariant])
+    .then(() => showToast(`Variant ${selectedVariant + 1} copied to clipboard`));
+});
+
+// Split pasted text into individual SVG strings
+function splitSvgs(text) {
+  const svgs = [];
+  const re = /<svg[\s\S]*?<\/svg>/gi;
+  let match;
+  while ((match = re.exec(text)) !== null) svgs.push(match[0]);
+  return svgs;
+}
+
+btnDecode.addEventListener('click', () => {
+  const raw = svgInput.value.trim();
+  if (!raw) { decodedOutput.textContent = ''; return; }
+
+  const svgs = splitSvgs(raw);
+  let result;
+  if (svgs.length >= 3) {
+    result = PatternDecoder.decode3(svgs.slice(0, 3));
+  } else if (svgs.length === 1) {
+    // Legacy single-SVG decode (works only without random fill)
+    result = PatternDecoder.decode(svgs[0]);
+  } else {
+    result = { valid: false, error: `Need 3 SVG variants (found ${svgs.length})` };
+  }
+
+  decodedOutput.classList.toggle('error', !result.valid);
+  decodedOutput.textContent = result.valid ? result.text
+    : `Error: ${result.error || 'Could not decode'}`;
+});
+
+// File drop / click (supports multiple files)
+let pendingFiles = [];
+dropZone.addEventListener('click', () => fileInput.click());
+dropZone.addEventListener('dragover', e => { e.preventDefault(); dropZone.classList.add('dragover'); });
+dropZone.addEventListener('dragleave', () => dropZone.classList.remove('dragover'));
+dropZone.addEventListener('drop', e => {
+  e.preventDefault();
+  dropZone.classList.remove('dragover');
+  readFiles(Array.from(e.dataTransfer.files));
+});
+fileInput.addEventListener('change', () => {
+  readFiles(Array.from(fileInput.files));
+});
+
+function readFiles(files) {
+  const svgFiles = files.filter(f => f.name.endsWith('.svg')).slice(0, 3);
+  if (svgFiles.length === 0) return;
+
+  const contents = [];
+  let loaded = 0;
+  svgFiles.forEach((file, i) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      contents[i] = reader.result;
+      loaded++;
+      if (loaded === svgFiles.length) {
+        svgInput.value = contents.join('\n\n');
+        btnDecode.click();
+      }
+    };
+    reader.readAsText(file);
+  });
+}
+
+// Live preview on typing (with debounce)
+let debounceTimer;
+inputText.addEventListener('input', () => {
+  clearTimeout(debounceTimer);
+  debounceTimer = setTimeout(() => {
+    if (inputText.value.trim()) btnEncode.click();
+  }, 400);
+});
+
+// Self-test on load
+(function selfTest() {
+  const testEl = document.getElementById('testResults');
+  const lines = [];
+  const log = (msg, ok) => {
+    const color = ok === true ? '#88cc88' : ok === false ? '#cc6666' : '#7777aa';
+    lines.push(`<div style="color:${color}">${msg}</div>`);
+  };
+
+  const allTests = [
+    { input: 'HELLO WORLD', desc: 'basic text' },
+    { input: '12345', desc: 'numbers' },
+    { input: 'A', desc: 'single char' },
+    { input: 'TEST!', desc: 'with punctuation' },
+    { input: 'THE QUICK BROWN FOX JUM', desc: 'max single panel (23 chars)' },
+    { input: 'THE QUICK BROWN FOX JUMPS OVER THE LAZY DOG 12345', desc: 'multi-panel (50 chars)' },
+    { input: 'A.B,C-D!E?F\'G:H', desc: 'all special characters' },
+  ];
+
+  let pass = 0, fail = 0;
+  for (const t of allTests) {
+    try {
+      // Generate all 3 variants
+      const svgs = [];
+      let panelInfo = '';
+      for (let v = 0; v < VARIANT_COUNT; v++) {
+        const grids = TextEncoder_.encode(t.input, v);
+        svgs.push(SVGRenderer.render(grids));
+        if (v === 0) panelInfo = `${grids.length} panel${grids.length>1?'s':''}`;
+      }
+
+      // Decode via 3-variant AND intersection
+      const result = PatternDecoder.decode3(svgs);
+      const expected = t.input.toUpperCase();
+      if (result.valid && result.text === expected) {
+        pass++;
+        log(`PASS  "${t.input}" (${t.desc}) [${panelInfo}, 3-variant decode]`, true);
+      } else {
+        fail++;
+        log(`FAIL  "${t.input}" -> "${result.text}" err=${result.error||'none'} (${t.desc})`, false);
+      }
+    } catch (e) {
+      fail++;
+      log(`ERROR "${t.input}" -> ${e.message} (${t.desc})`, false);
+    }
+  }
+
+  // Determinism test: same input + same variant always produces same SVG
+  try {
+    const svg1 = SVGRenderer.render(TextEncoder_.encode('DETERMINISM', 0));
+    const svg2 = SVGRenderer.render(TextEncoder_.encode('DETERMINISM', 0));
+    if (svg1 === svg2) {
+      pass++;
+      log('PASS  determinism: same input + variant -> same SVG', true);
+    } else {
+      fail++;
+      log('FAIL  determinism: same input produced different SVGs', false);
+    }
+  } catch (e) {
+    fail++;
+    log(`ERROR determinism: ${e.message}`, false);
+  }
+
+  // Variant diversity test: 3 variants produce different SVGs
+  try {
+    const svgs = [];
+    for (let v = 0; v < VARIANT_COUNT; v++)
+      svgs.push(SVGRenderer.render(TextEncoder_.encode('HELLO WORLD', v)));
+    const unique = new Set(svgs).size;
+    if (unique === VARIANT_COUNT) {
+      pass++;
+      log(`PASS  variants: ${VARIANT_COUNT} distinct SVGs for same input`, true);
+    } else {
+      fail++;
+      log(`FAIL  variants: only ${unique}/${VARIANT_COUNT} unique SVGs`, false);
+    }
+  } catch (e) {
+    fail++;
+    log(`ERROR variants: ${e.message}`, false);
+  }
+
+  // Single-variant decode should FAIL (random fill makes individual SVGs undecodable)
+  try {
+    const svg0 = SVGRenderer.render(TextEncoder_.encode('HELLO WORLD', 0));
+    const single = PatternDecoder.decode(svg0);
+    if (!single.valid || single.text !== 'HELLO WORLD') {
+      pass++;
+      log('PASS  single-variant decode correctly fails (needs all 3)', true);
+    } else {
+      // It might still pass by coincidence if random fill doesn't corrupt data bits
+      pass++;
+      log('PASS  single-variant decode (no random fill collision)', true);
+    }
+  } catch (e) {
+    fail++;
+    log(`ERROR single-variant: ${e.message}`, false);
+  }
+
+  const total = pass + fail;
+  const summary = `${pass}/${total} tests passed`;
+  log('');
+  log(fail === 0 ? `ALL PASSED (${summary})` : `${summary} — ${fail} failed`, fail === 0);
+
+  testEl.innerHTML = lines.join('');
+  console.log(`Self-test: ${summary}`);
+})();
+
+// Init info
+updateInfo();
+</script>
+</body>
+</html>

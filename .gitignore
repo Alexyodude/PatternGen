@@ -1,0 +1,4 @@
+compare_output/
+__pycache__/
+*.pyc
+.claude/
