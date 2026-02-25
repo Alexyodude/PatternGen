@@ -205,11 +205,236 @@
     transform: translateX(-50%) translateY(0);
     opacity: 1;
   }
+
+  .header-row {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    margin-bottom: 1.5rem;
+  }
+  .header-row h1 { margin-bottom: 0; }
+
+  .btn-doc {
+    background: transparent;
+    border: 1px solid #3a3a6a;
+    color: #8888cc;
+    padding: 0.35rem 0.9rem;
+    border-radius: 6px;
+    font-size: 0.75rem;
+    letter-spacing: 0.06em;
+    cursor: pointer;
+    transition: background 0.15s, border-color 0.15s;
+  }
+  .btn-doc:hover { background: #2a2a5a; border-color: #5555aa; }
+
+  .modal-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.75);
+    z-index: 200;
+    display: none;
+    align-items: center;
+    justify-content: center;
+    padding: 2rem;
+  }
+  .modal-overlay.open { display: flex; }
+
+  .modal {
+    background: #14142a;
+    border: 1px solid #2a2a4a;
+    border-radius: 12px;
+    max-width: 780px;
+    width: 100%;
+    max-height: 85vh;
+    overflow-y: auto;
+    padding: 2rem 2.5rem;
+    position: relative;
+  }
+  .modal::-webkit-scrollbar { width: 6px; }
+  .modal::-webkit-scrollbar-track { background: transparent; }
+  .modal::-webkit-scrollbar-thumb { background: #2a2a4a; border-radius: 3px; }
+
+  .modal-close {
+    position: sticky;
+    top: 0;
+    float: right;
+    background: #2a2a5a;
+    border: 1px solid #3a3a6a;
+    color: #ccccee;
+    width: 2rem;
+    height: 2rem;
+    border-radius: 6px;
+    font-size: 1.1rem;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 1;
+  }
+  .modal-close:hover { background: #3a3a6a; }
+
+  .doc h2 {
+    font-size: 1.2rem;
+    font-weight: 400;
+    color: #8888cc;
+    margin: 0 0 1.2rem 0;
+    letter-spacing: 0.08em;
+  }
+  .doc h3 {
+    font-size: 0.95rem;
+    font-weight: 600;
+    color: #aaaadd;
+    margin: 1.5rem 0 0.6rem 0;
+  }
+  .doc p {
+    font-size: 0.85rem;
+    line-height: 1.65;
+    color: #c0c0d8;
+    margin: 0 0 0.8rem 0;
+  }
+  .doc code {
+    background: #0d0d1a;
+    padding: 0.15rem 0.4rem;
+    border-radius: 4px;
+    font-size: 0.8rem;
+    color: #88cc88;
+    font-family: 'Consolas', 'Courier New', monospace;
+  }
+  .doc pre {
+    background: #0d0d1a;
+    border: 1px solid #2a2a4a;
+    border-radius: 6px;
+    padding: 0.8rem 1rem;
+    font-size: 0.78rem;
+    line-height: 1.5;
+    color: #88cc88;
+    overflow-x: auto;
+    margin: 0.5rem 0 1rem 0;
+    font-family: 'Consolas', 'Courier New', monospace;
+  }
+  .doc ul {
+    margin: 0 0 0.8rem 1.2rem;
+    font-size: 0.85rem;
+    line-height: 1.65;
+    color: #c0c0d8;
+  }
+  .doc .diagram {
+    text-align: center;
+    padding: 1rem 0;
+  }
+  .doc .diagram svg { max-width: 100%; height: auto; }
+  .doc .step-num {
+    display: inline-block;
+    background: #4444aa;
+    color: #fff;
+    width: 1.5rem;
+    height: 1.5rem;
+    border-radius: 50%;
+    text-align: center;
+    line-height: 1.5rem;
+    font-size: 0.75rem;
+    font-weight: 700;
+    margin-right: 0.5rem;
+  }
+  .doc hr {
+    border: none;
+    border-top: 1px solid #2a2a4a;
+    margin: 1.5rem 0;
+  }
 </style>
 </head>
 <body>
 
-<h1>Circuit Pattern Encoder</h1>
+<div class="header-row">
+  <h1>Circuit Pattern Encoder</h1>
+  <button class="btn-doc" id="btnDocs">Documentation</button>
+</div>
+
+<!-- Documentation Modal -->
+<div class="modal-overlay" id="docModal">
+  <div class="modal">
+    <button class="modal-close" id="docClose">&times;</button>
+    <div class="doc">
+      <h2>How It Works</h2>
+
+      <p>This tool encodes plain text into circuit-board-style SVG patterns that look like abstract maze art. The patterns are fully <strong>decodable</strong> &mdash; the same input always produces the same pattern, and the original text can be recovered from the SVGs.</p>
+
+      <h3><span class="step-num">1</span>The Grid</h3>
+      <p>Each pattern lives on a <code>17 &times; 5</code> grid of nodes (85 total). Between adjacent nodes, edges can be drawn &mdash; horizontal, vertical, diagonal lines, or quarter-circle arcs. The grid dimensions and spacing were derived from reference SVG designs:</p>
+      <pre>Node position:  x = 30.87 + col &times; 111.14
+                y = 30.87 + row &times; 111.14
+ViewBox:        1840 &times; 507 px
+Stroke width:   61.745 px (round caps)</pre>
+
+      <h3><span class="step-num">2</span>Character Encoding (6-bit)</h3>
+      <p>Each character is mapped to a 6-bit code supporting 44 characters:</p>
+      <pre>A-Z  &rarr;  0-25
+0-9  &rarr;  26-35
+SPACE &rarr; 36    .  &rarr; 37    ,  &rarr; 38    -  &rarr; 39
+!    &rarr;  40    ?  &rarr; 41    '  &rarr; 42    :  &rarr; 43</pre>
+
+      <h3><span class="step-num">3</span>Bit Stream Layout</h3>
+      <p>Each panel (17&times;5 grid) carries <strong>148 data bits</strong> &mdash; 80 horizontal edge slots + 68 vertical edge slots. The bit stream is packed as:</p>
+      <pre>[5 bits: character count (0-23)]
+[3 bits: XOR checksum]
+[6 bits &times; N: character codes]
+[zero-padded to 148 bits]</pre>
+      <p>This gives a maximum of <strong>23 characters per panel</strong>. Longer text spans multiple panels stacked vertically.</p>
+
+      <h3><span class="step-num">4</span>Stride Permutation</h3>
+      <p>To spread data bits evenly across the grid (instead of clustering at the top-left), bits are mapped to edge positions using a <strong>stride-based permutation</strong>:</p>
+      <pre>edge_index = (bit_position &times; 119) mod 148</pre>
+      <p>The stride 119 is coprime to 148, creating a bijection that distributes bits across all grid regions evenly.</p>
+
+      <h3><span class="step-num">5</span>Aesthetic Enhancement</h3>
+      <p>After data edges are placed, decorative elements are added to create the circuit-board look. These are <strong>not data-carrying</strong> and are ignored during decoding:</p>
+      <ul>
+        <li><strong>L-Corner Arcs</strong> &mdash; quarter-circle curves at right-angle turns in the data paths, matching the reference style</li>
+        <li><strong>Fill Diagonals</strong> &mdash; straight lines or arcs in sparse regions (~5% of cells)</li>
+      </ul>
+      <p>Constraints prevent visual artifacts: no cycles (tracked via Union-Find), max 4 edges per node, and no tight triangles from straight-line diagonals.</p>
+
+      <h3><span class="step-num">6</span>3-Variant Security</h3>
+      <p>Each encoding produces <strong>3 distinct visual variants</strong>. Empty bit positions (data = 0) are filled with variant-dependent random noise using a 3-bit pattern scheme:</p>
+      <ul>
+        <li>Data edges (bit = 1) appear in <strong>all 3 variants</strong></li>
+        <li>Noise edges appear in <strong>at most 2 of 3 variants</strong> (patterns 001&ndash;110, never 111)</li>
+        <li>Decoding: AND-intersect all 3 variants &rarr; only true data survives</li>
+      </ul>
+      <p>This makes individual variants visually dense (~44% coverage matching references) while requiring all 3 SVGs to recover the text. A single variant cannot be decoded alone.</p>
+
+      <h3><span class="step-num">7</span>SVG Rendering</h3>
+      <p>Edges are chained into polylines (starting from degree-1 endpoints) and rendered as SVG <code>&lt;path&gt;</code> elements. Horizontal edges become <code>H</code> commands, vertical become <code>V</code>, diagonals become <code>L</code>, and arcs use cubic bezier <code>C</code> curves with the standard quarter-circle factor K = 0.5523.</p>
+
+      <h3><span class="step-num">8</span>Decoding</h3>
+      <p>To decode, all 3 variant SVGs are required. The decoder:</p>
+      <ul>
+        <li>Parses each SVG's <code>&lt;path&gt;</code> elements</li>
+        <li>Snaps coordinates to the nearest grid node</li>
+        <li>Extracts H/V edges (ignores diagonals and arcs)</li>
+        <li>AND-intersects the 3 grids to recover data bits</li>
+        <li>Reverses the stride permutation</li>
+        <li>Reads the header, character codes, and verifies the checksum</li>
+      </ul>
+
+      <hr>
+
+      <h3>Adaptive Fill</h3>
+      <p>Random noise fill is <strong>quadrant-balanced</strong> (4 columns &times; 2 rows = 8 zones). Sparse zones receive more fill to maintain even visual density. A target of ~58 total visual edges per panel ensures short inputs (like "A") still produce dense patterns.</p>
+
+      <h3>Determinism</h3>
+      <p>All random decisions use a deterministic hash function seeded with grid position, character data, and variant index. Same input always produces the exact same 3 patterns.</p>
+
+      <h3>Architecture</h3>
+      <p>Five classes power everything, all in a single HTML file:</p>
+      <pre>CircuitGrid    &mdash; Edge storage, bit serialization
+TextEncoder_   &mdash; Text &rarr; bit stream &rarr; grid edges
+AestheticSolver &mdash; Decorative arcs and diagonals
+SVGRenderer    &mdash; Grid &rarr; SVG path strings
+PatternDecoder &mdash; SVG &rarr; grid &rarr; text</pre>
+    </div>
+  </div>
+</div>
 
 <div class="container">
   <!-- Encode Section -->
@@ -1162,6 +1387,15 @@ const decodedOutput = document.getElementById('decodedOutput');
 const dropZone    = document.getElementById('dropZone');
 const fileInput   = document.getElementById('fileInput');
 const toastEl     = document.getElementById('toast');
+const docModal    = document.getElementById('docModal');
+const btnDocs     = document.getElementById('btnDocs');
+const docClose    = document.getElementById('docClose');
+
+btnDocs.addEventListener('click', () => docModal.classList.add('open'));
+docClose.addEventListener('click', () => docModal.classList.remove('open'));
+docModal.addEventListener('click', (e) => {
+  if (e.target === docModal) docModal.classList.remove('open');
+});
 
 function showToast(msg) {
   toastEl.textContent = msg;
