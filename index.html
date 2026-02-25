@@ -765,6 +765,21 @@ class TextEncoder_ {
       const selectNeeded = totalNeeded * 2; // ~50% fill rate per variant
       const basePerQ = selectNeeded / NQ;
       const avgExisting = totalHV / NQ;
+      // Build set of H/V edges that would visually cross through an arc's midpoint.
+      // Arc from (r1,c1)→(r2,c2) departs horizontally then arrives vertically,
+      // curving through the cell interior. The opposite-side edges cross the belly:
+      //   H edge at row r2 between min(c1,c2)
+      //   V edge at col c1 between min(r1,r2)
+      const arcBlockedHV = new Set();
+      for (const d of grid.dEdges) {
+        if (d.type !== 'arc') continue;
+        const {r1, c1, r2, c2} = d;
+        const hc = Math.min(c1, c2);
+        if (hc >= 0 && hc < COLS - 1) arcBlockedHV.add(`H:${r2},${hc}`);
+        const vr = Math.min(r1, r2);
+        if (vr >= 0 && vr < ROWS - 1) arcBlockedHV.add(`V:${vr},${c1}`);
+      }
+
       // Check if adding an H/V edge would complete a triangle with an existing diagonal
       const hvWouldTriangle = (type, r, c) => {
         // An H edge connects (r,c)-(r,c+1); a V edge connects (r,c)-(r+1,c)
@@ -821,6 +836,7 @@ class TextEncoder_ {
           const fillBit = (slot.pattern >> (2 - variant)) & 1;
           if (!fillBit) continue;
           if (hvWouldTriangle(slot.type, slot.r, slot.c)) continue;
+          if (arcBlockedHV.has(`${slot.type}:${slot.r},${slot.c}`)) continue;
           if (slot.type === 'H') grid.setH(slot.r, slot.c, 1);
           else grid.setV(slot.r, slot.c, 1);
         }
@@ -898,11 +914,27 @@ class AestheticSolver {
       return false;
     };
 
+    // Check if an arc from (r1,c1)→(r2,c2) would have its midpoint crossed by
+    // an existing H/V edge. The arc departs horizontally (from r1) and arrives
+    // vertically (into c2), curving through the cell interior. The opposite-side
+    // edges that cut across the arc's belly are:
+    //   H edge at row r2 between min(c1,c2) (opposite horizontal)
+    //   V edge at col c1 between min(r1,r2) (opposite vertical)
+    const arcCrossesExistingHV = (r1, c1, r2, c2) => {
+      const hc = Math.min(c1, c2);
+      if (hc >= 0 && hc < COLS - 1 && grid.getH(r2, hc)) return true;
+      const vr = Math.min(r1, r2);
+      if (vr >= 0 && vr < ROWS - 1 && grid.getV(vr, c1)) return true;
+      return false;
+    };
+
     // Helper: try to add a diagonal — rejects straight-line triangles, cycles, and degree overflow.
     // Arcs are exempt from the triangle check: they curve outward so the enclosed
     // region is filled by the thick stroke, unlike straight lines which leave a visible hole.
+    // Arcs are rejected if existing H/V edges would cross through their midpoint.
     const tryAdd = (r1, c1, r2, c2, type, skipCycleCheck = false) => {
       if (type !== 'arc' && wouldFormTriangle(r1, c1, r2, c2)) return false;
+      if (type === 'arc' && arcCrossesExistingHV(r1, c1, r2, c2)) return false;
       const a = nodeId(r1, c1), b = nodeId(r2, c2);
       if (!skipCycleCheck && uf.connected(a, b)) return false;
       if (grid.getNodeDegree(r1, c1) >= MAX_DEG) return false;
