@@ -341,6 +341,43 @@
     border-top: 1px solid #2a2a4a;
     margin: 1.5rem 0;
   }
+
+  .toggle-wrap {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    margin-left: auto;
+  }
+  .toggle-label {
+    font-size: 0.7rem;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    color: #5555aa;
+    cursor: pointer;
+    user-select: none;
+  }
+  .toggle-label.active { color: #8888dd; }
+  .toggle-track {
+    width: 36px;
+    height: 20px;
+    background: #2a2a4a;
+    border-radius: 10px;
+    position: relative;
+    cursor: pointer;
+    transition: background 0.2s;
+  }
+  .toggle-track.on { background: #4444aa; }
+  .toggle-thumb {
+    position: absolute;
+    top: 2px;
+    left: 2px;
+    width: 16px;
+    height: 16px;
+    background: #ccccee;
+    border-radius: 50%;
+    transition: left 0.2s;
+  }
+  .toggle-track.on .toggle-thumb { left: 18px; }
 </style>
 <script type="importmap">
 {
@@ -460,40 +497,48 @@ PatternDecoder &mdash; SVG &rarr; grid &rarr; text</pre>
       <button id="btnDownloadAll" disabled>Download All (.zip)</button>
       <button id="btnCopy" disabled>Copy SVG</button>
       <button id="btnShare" disabled>Share Link</button>
+      <button id="btnDownloadSTL" disabled>Download All STL</button>
     </div>
   </div>
 
   <!-- Preview -->
   <div class="panel">
-    <div class="panel-label">Preview — 3 Variants (click to select)</div>
-    <div class="preview-area" id="previewArea">
-      <span class="preview-placeholder">Enter text and click Encode</span>
-    </div>
-  </div>
-
-  <!-- 3D Model Preview -->
-  <div class="panel" id="model3DPanel" style="display: none;">
-    <div class="panel-label">3D Model Preview — 3 Variants</div>
-    <div style="display: flex; flex-direction: column; gap: 0.75rem;">
-      <div class="model3d-slot" style="position: relative; background: #0d0d1a; border-radius: 8px; height: 300px;">
-        <span class="model3d-label" style="position: absolute; top: 0.5rem; left: 0.75rem; font-size: 0.65rem; text-transform: uppercase; letter-spacing: 0.1em; color: #5555aa; font-weight: 600; z-index: 1;">Variant 1</span>
-        <canvas class="model3d-canvas" style="width: 100%; height: 100%; display: block;"></canvas>
-        <span class="model3d-loading" style="position: absolute; top: 50%; left: 50%; transform: translate(-50%,-50%); color: #6666aa; font-size: 0.9rem;">Loading...</span>
-      </div>
-      <div class="model3d-slot" style="position: relative; background: #0d0d1a; border-radius: 8px; height: 300px;">
-        <span class="model3d-label" style="position: absolute; top: 0.5rem; left: 0.75rem; font-size: 0.65rem; text-transform: uppercase; letter-spacing: 0.1em; color: #5555aa; font-weight: 600; z-index: 1;">Variant 2</span>
-        <canvas class="model3d-canvas" style="width: 100%; height: 100%; display: block;"></canvas>
-        <span class="model3d-loading" style="position: absolute; top: 50%; left: 50%; transform: translate(-50%,-50%); color: #6666aa; font-size: 0.9rem;">Loading...</span>
-      </div>
-      <div class="model3d-slot" style="position: relative; background: #0d0d1a; border-radius: 8px; height: 300px;">
-        <span class="model3d-label" style="position: absolute; top: 0.5rem; left: 0.75rem; font-size: 0.65rem; text-transform: uppercase; letter-spacing: 0.1em; color: #5555aa; font-weight: 600; z-index: 1;">Variant 3</span>
-        <canvas class="model3d-canvas" style="width: 100%; height: 100%; display: block;"></canvas>
-        <span class="model3d-loading" style="position: absolute; top: 50%; left: 50%; transform: translate(-50%,-50%); color: #6666aa; font-size: 0.9rem;">Loading...</span>
+    <div style="display: flex; align-items: center; margin-bottom: 0.75rem;">
+      <div class="panel-label" style="margin-bottom: 0;">Preview — 3 Variants</div>
+      <div class="toggle-wrap" id="viewToggle">
+        <span class="toggle-label active" data-mode="svg">SVG</span>
+        <div class="toggle-track" id="toggleTrack">
+          <div class="toggle-thumb"></div>
+        </div>
+        <span class="toggle-label" data-mode="3d">3D</span>
       </div>
     </div>
-    <div style="display: flex; align-items: center; gap: 1rem; margin-top: 0.75rem;">
-      <button id="btnDownloadSTL" class="primary">Download All STL</button>
-      <span id="model3DDims" style="font-size: 0.78rem; color: #7777aa;"></span>
+    <div id="svgPreviewWrap">
+      <div class="preview-area" id="previewArea">
+        <span class="preview-placeholder">Enter text and click Encode</span>
+      </div>
+    </div>
+    <div id="model3DWrap" style="display: none;">
+      <div style="display: flex; flex-direction: column; gap: 0.75rem;">
+        <div class="model3d-slot" style="position: relative; background: #0d0d1a; border-radius: 8px; height: 300px;">
+          <span class="model3d-label" style="position: absolute; top: 0.5rem; left: 0.75rem; font-size: 0.65rem; text-transform: uppercase; letter-spacing: 0.1em; color: #5555aa; font-weight: 600; z-index: 1;">Variant 1</span>
+          <canvas class="model3d-canvas" style="width: 100%; height: 100%; display: block;"></canvas>
+          <span class="model3d-loading" style="position: absolute; top: 50%; left: 50%; transform: translate(-50%,-50%); color: #6666aa; font-size: 0.9rem;">Loading...</span>
+        </div>
+        <div class="model3d-slot" style="position: relative; background: #0d0d1a; border-radius: 8px; height: 300px;">
+          <span class="model3d-label" style="position: absolute; top: 0.5rem; left: 0.75rem; font-size: 0.65rem; text-transform: uppercase; letter-spacing: 0.1em; color: #5555aa; font-weight: 600; z-index: 1;">Variant 2</span>
+          <canvas class="model3d-canvas" style="width: 100%; height: 100%; display: block;"></canvas>
+          <span class="model3d-loading" style="position: absolute; top: 50%; left: 50%; transform: translate(-50%,-50%); color: #6666aa; font-size: 0.9rem;">Loading...</span>
+        </div>
+        <div class="model3d-slot" style="position: relative; background: #0d0d1a; border-radius: 8px; height: 300px;">
+          <span class="model3d-label" style="position: absolute; top: 0.5rem; left: 0.75rem; font-size: 0.65rem; text-transform: uppercase; letter-spacing: 0.1em; color: #5555aa; font-weight: 600; z-index: 1;">Variant 3</span>
+          <canvas class="model3d-canvas" style="width: 100%; height: 100%; display: block;"></canvas>
+          <span class="model3d-loading" style="position: absolute; top: 50%; left: 50%; transform: translate(-50%,-50%); color: #6666aa; font-size: 0.9rem;">Loading...</span>
+        </div>
+      </div>
+      <div style="margin-top: 0.5rem;">
+        <span id="model3DDims" style="font-size: 0.78rem; color: #7777aa;"></span>
+      </div>
     </div>
   </div>
 
@@ -1560,6 +1605,7 @@ const decodedOutput = document.getElementById('decodedOutput');
 const dropZone    = document.getElementById('dropZone');
 const fileInput   = document.getElementById('fileInput');
 const btnShare    = document.getElementById('btnShare');
+const btnSTL      = document.getElementById('btnDownloadSTL');
 const toastEl     = document.getElementById('toast');
 const docModal    = document.getElementById('docModal');
 const btnDocs     = document.getElementById('btnDocs');
@@ -1605,6 +1651,7 @@ btnEncode.addEventListener('click', () => {
     btnDownloadAll.disabled = true;
     btnCopy.disabled = true;
     btnShare.disabled = true;
+    btnSTL.disabled = true;
     currentSvgs = [];
     return;
   }
@@ -1637,6 +1684,7 @@ btnEncode.addEventListener('click', () => {
     btnDownloadAll.disabled = false;
     btnCopy.disabled = false;
     btnShare.disabled = false;
+    btnSTL.disabled = false;
 
     if (isValid) {
       showToast('3 variants encoded — decodes correctly via intersection');
@@ -1704,6 +1752,32 @@ btnShare.addEventListener('click', () => {
     .then(() => showToast('Share link copied to clipboard'));
   history.replaceState(null, '', url.toString());
 });
+
+// SVG / 3D toggle
+const toggleTrack = document.getElementById('toggleTrack');
+const svgPreviewWrap = document.getElementById('svgPreviewWrap');
+const model3DWrap = document.getElementById('model3DWrap');
+const toggleLabels = document.querySelectorAll('.toggle-label');
+window._viewMode = 'svg';
+
+function setViewMode(mode) {
+  window._viewMode = mode;
+  const is3D = mode === '3d';
+  toggleTrack.classList.toggle('on', is3D);
+  toggleLabels.forEach(l => l.classList.toggle('active', l.dataset.mode === mode));
+  svgPreviewWrap.style.display = is3D ? 'none' : '';
+  model3DWrap.style.display = is3D ? '' : 'none';
+  if (is3D && currentSvgs.length) {
+    window.dispatchEvent(new CustomEvent('render3d'));
+  }
+}
+
+toggleTrack.addEventListener('click', () => {
+  setViewMode(window._viewMode === 'svg' ? '3d' : 'svg');
+});
+toggleLabels.forEach(l => l.addEventListener('click', () => {
+  setViewMode(l.dataset.mode);
+}));
 
 // Split pasted text into individual SVG strings
 function splitSvgs(text) {
@@ -2147,7 +2221,7 @@ function frameMesh(group, camera, controls) {
 
   const maxDim = Math.max(size.x, size.y, size.z);
   const fov = camera.fov * (Math.PI / 180);
-  const dist = maxDim / (2 * Math.tan(fov / 2)) * 1.5;
+  const dist = maxDim / (2 * Math.tan(fov / 2)) * 1.05;
 
   camera.position.set(center.x, center.y, center.z + dist);
   camera.near = dist / 100;
@@ -2157,8 +2231,7 @@ function frameMesh(group, camera, controls) {
   controls.update();
 }
 
-// ─── Inline 3D Panel Logic ──────────────────────────────────────────
-const panel3D = document.getElementById('model3DPanel');
+// ─── 3D View Logic ──────────────────────────────────────────────────
 const slots = document.querySelectorAll('.model3d-slot');
 const canvases = document.querySelectorAll('.model3d-canvas');
 const loadingEls = document.querySelectorAll('.model3d-loading');
@@ -2166,6 +2239,7 @@ const dimsEl = document.getElementById('model3DDims');
 const btnSTL = document.getElementById('btnDownloadSTL');
 
 let sceneStates = [null, null, null];
+let rendered3D = false; // tracks whether current SVGs have been rendered
 
 function disposeScene(index) {
   const s = sceneStates[index];
@@ -2185,17 +2259,16 @@ function disposeScene(index) {
 
 function disposeAll() {
   for (let i = 0; i < 3; i++) disposeScene(i);
+  rendered3D = false;
 }
 
 function render3DPreviews() {
   const allSvgs = window._getAllSvgs();
   if (!allSvgs || !allSvgs.length) {
-    panel3D.style.display = 'none';
     disposeAll();
     return;
   }
 
-  panel3D.style.display = '';
   dimsEl.textContent = '';
   disposeAll();
 
@@ -2224,7 +2297,6 @@ function render3DPreviews() {
         }
 
         let animId;
-        const thisV = v;
         function animate() {
           animId = requestAnimationFrame(animate);
           controls.update();
@@ -2238,16 +2310,20 @@ function render3DPreviews() {
         loadingEls[v].style.color = '#cc6666';
       }
     }
+    rendered3D = true;
   });
 }
 
-// Auto-render when encoding completes
+// Render when toggled to 3D (if not already rendered for current data)
+window.addEventListener('render3d', () => {
+  if (!rendered3D) render3DPreviews();
+});
+
+// Invalidate 3D when SVGs change (new encode)
 const observer = new MutationObserver(() => {
-  if (window._getAllSvgs() && window._getAllSvgs().length) {
+  disposeAll(); // mark stale
+  if (window._viewMode === '3d' && window._getAllSvgs() && window._getAllSvgs().length) {
     render3DPreviews();
-  } else {
-    panel3D.style.display = 'none';
-    disposeAll();
   }
 });
 observer.observe(document.getElementById('previewArea'), { childList: true });
@@ -2266,7 +2342,6 @@ btnSTL.addEventListener('click', () => {
     const polylines = parseSvgPathsToPolylines(allSvgs[v]);
     const group = buildModel(polylines, SCALE, RADIUS, HEIGHT);
 
-    // Wrap in a temp scene for export
     const tempScene = new THREE.Scene();
     tempScene.add(group);
 
@@ -2279,7 +2354,6 @@ btnSTL.addEventListener('click', () => {
     a.click();
     URL.revokeObjectURL(url);
 
-    // Dispose temp geometry
     tempScene.traverse(obj => {
       if (obj.geometry) obj.geometry.dispose();
       if (obj.material) {
