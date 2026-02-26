@@ -342,6 +342,14 @@
     margin: 1.5rem 0;
   }
 </style>
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"
+  }
+}
+</script>
 </head>
 <body>
 
@@ -460,6 +468,32 @@ PatternDecoder &mdash; SVG &rarr; grid &rarr; text</pre>
     <div class="panel-label">Preview — 3 Variants (click to select)</div>
     <div class="preview-area" id="previewArea">
       <span class="preview-placeholder">Enter text and click Encode</span>
+    </div>
+  </div>
+
+  <!-- 3D Model Preview -->
+  <div class="panel" id="model3DPanel" style="display: none;">
+    <div class="panel-label">3D Model Preview — 3 Variants</div>
+    <div style="display: flex; flex-direction: column; gap: 0.75rem;">
+      <div class="model3d-slot" style="position: relative; background: #0d0d1a; border-radius: 8px; height: 300px;">
+        <span class="model3d-label" style="position: absolute; top: 0.5rem; left: 0.75rem; font-size: 0.65rem; text-transform: uppercase; letter-spacing: 0.1em; color: #5555aa; font-weight: 600; z-index: 1;">Variant 1</span>
+        <canvas class="model3d-canvas" style="width: 100%; height: 100%; display: block;"></canvas>
+        <span class="model3d-loading" style="position: absolute; top: 50%; left: 50%; transform: translate(-50%,-50%); color: #6666aa; font-size: 0.9rem;">Loading...</span>
+      </div>
+      <div class="model3d-slot" style="position: relative; background: #0d0d1a; border-radius: 8px; height: 300px;">
+        <span class="model3d-label" style="position: absolute; top: 0.5rem; left: 0.75rem; font-size: 0.65rem; text-transform: uppercase; letter-spacing: 0.1em; color: #5555aa; font-weight: 600; z-index: 1;">Variant 2</span>
+        <canvas class="model3d-canvas" style="width: 100%; height: 100%; display: block;"></canvas>
+        <span class="model3d-loading" style="position: absolute; top: 50%; left: 50%; transform: translate(-50%,-50%); color: #6666aa; font-size: 0.9rem;">Loading...</span>
+      </div>
+      <div class="model3d-slot" style="position: relative; background: #0d0d1a; border-radius: 8px; height: 300px;">
+        <span class="model3d-label" style="position: absolute; top: 0.5rem; left: 0.75rem; font-size: 0.65rem; text-transform: uppercase; letter-spacing: 0.1em; color: #5555aa; font-weight: 600; z-index: 1;">Variant 3</span>
+        <canvas class="model3d-canvas" style="width: 100%; height: 100%; display: block;"></canvas>
+        <span class="model3d-loading" style="position: absolute; top: 50%; left: 50%; transform: translate(-50%,-50%); color: #6666aa; font-size: 0.9rem;">Loading...</span>
+      </div>
+    </div>
+    <div style="display: flex; align-items: center; gap: 1rem; margin-top: 0.75rem;">
+      <button id="btnDownloadSTL" class="primary">Download All STL</button>
+      <span id="model3DDims" style="font-size: 0.78rem; color: #7777aa;"></span>
     </div>
   </div>
 
@@ -1853,6 +1887,20 @@ inputText.addEventListener('input', () => {
 // Init info
 updateInfo();
 
+// Expose classes and constants to window for testing
+window.CHARSET = CHARSET;
+window.TextEncoder_ = TextEncoder_;
+window.SVGRenderer = SVGRenderer;
+window.PatternDecoder = PatternDecoder;
+window.CircuitGrid = CircuitGrid;
+window.AestheticSolver = AestheticSolver;
+
+// Bridge for module script access
+window._getCurrentSvg = () => currentSvgs[selectedVariant];
+window._getAllSvgs = () => currentSvgs;
+window._getSelectedVariant = () => selectedVariant;
+window._getInputText = () => inputText.value.trim().toUpperCase();
+
 // Auto-encode from URL query parameter
 const urlParams = new URLSearchParams(window.location.search);
 const sharedText = urlParams.get('text');
@@ -1862,5 +1910,386 @@ if (sharedText) {
   btnEncode.click();
 }
 </script>
+
+<script type="module">
+// ─── 3D Model Preview & STL Export ──────────────────────────────────
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { STLExporter } from 'three/addons/exporters/STLExporter.js';
+
+const SCALE = 3 / 61.745;  // SVG units → mm (stroke width 61.745 → 3mm diameter)
+const RADIUS = 1.5;        // mm (half of 3mm stroke)
+const HEIGHT = 5;           // mm extrusion height
+const CYL_SEGS = 16;       // cylinder segments
+const BEZIER_SAMPLES = 20; // samples per bezier curve
+
+// Parse SVG path data into polylines of {x, y} points
+function parseSvgPathsToPolylines(svgString) {
+  const parser = new DOMParser();
+  const doc = parser.parseFromString(svgString, 'image/svg+xml');
+  const paths = doc.querySelectorAll('path');
+  const polylines = [];
+
+  for (const path of paths) {
+    const d = path.getAttribute('d');
+    if (!d) continue;
+
+    const points = [];
+    let cx = 0, cy = 0;
+
+    // Tokenize: split into commands and numbers
+    const tokens = d.match(/[MmLlHhVvCcSsQqTtAaZz]|[-+]?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?/g);
+    if (!tokens) continue;
+
+    let i = 0;
+    const num = () => parseFloat(tokens[i++]);
+
+    while (i < tokens.length) {
+      const cmd = tokens[i];
+      if (/^[MmLlHhVvCcSsQqTtAaZz]$/.test(cmd)) {
+        i++;
+        switch (cmd) {
+          case 'M':
+            cx = num(); cy = num();
+            points.push({ x: cx, y: cy });
+            break;
+          case 'm':
+            cx += num(); cy += num();
+            points.push({ x: cx, y: cy });
+            break;
+          case 'L':
+            cx = num(); cy = num();
+            points.push({ x: cx, y: cy });
+            break;
+          case 'l':
+            cx += num(); cy += num();
+            points.push({ x: cx, y: cy });
+            break;
+          case 'H':
+            cx = num();
+            points.push({ x: cx, y: cy });
+            break;
+          case 'h':
+            cx += num();
+            points.push({ x: cx, y: cy });
+            break;
+          case 'V':
+            cy = num();
+            points.push({ x: cx, y: cy });
+            break;
+          case 'v':
+            cy += num();
+            points.push({ x: cx, y: cy });
+            break;
+          case 'C': {
+            const x1 = num(), y1 = num();
+            const x2 = num(), y2 = num();
+            const x3 = num(), y3 = num();
+            // Sample cubic bezier
+            for (let t = 1; t <= BEZIER_SAMPLES; t++) {
+              const u = t / BEZIER_SAMPLES;
+              const u2 = u * u, u3 = u2 * u;
+              const inv = 1 - u, inv2 = inv * inv, inv3 = inv2 * inv;
+              const px = inv3 * cx + 3 * inv2 * u * x1 + 3 * inv * u2 * x2 + u3 * x3;
+              const py = inv3 * cy + 3 * inv2 * u * y1 + 3 * inv * u2 * y2 + u3 * y3;
+              points.push({ x: px, y: py });
+            }
+            cx = x3; cy = y3;
+            break;
+          }
+          case 'c': {
+            const dx1 = num(), dy1 = num();
+            const dx2 = num(), dy2 = num();
+            const dx3 = num(), dy3 = num();
+            const x1 = cx + dx1, y1 = cy + dy1;
+            const x2 = cx + dx2, y2 = cy + dy2;
+            const x3 = cx + dx3, y3 = cy + dy3;
+            for (let t = 1; t <= BEZIER_SAMPLES; t++) {
+              const u = t / BEZIER_SAMPLES;
+              const u2 = u * u, u3 = u2 * u;
+              const inv = 1 - u, inv2 = inv * inv, inv3 = inv2 * inv;
+              const px = inv3 * cx + 3 * inv2 * u * x1 + 3 * inv * u2 * x2 + u3 * x3;
+              const py = inv3 * cy + 3 * inv2 * u * y1 + 3 * inv * u2 * y2 + u3 * y3;
+              points.push({ x: px, y: py });
+            }
+            cx = x3; cy = y3;
+            break;
+          }
+          case 'Z': case 'z':
+            if (points.length > 0) {
+              points.push({ x: points[0].x, y: points[0].y });
+              cx = points[0].x; cy = points[0].y;
+            }
+            break;
+          default:
+            // Skip unsupported commands
+            break;
+        }
+      } else {
+        // Implicit repeat of last command - treat as coordinate
+        i++; // skip this token
+      }
+    }
+
+    if (points.length >= 2) {
+      polylines.push(points);
+    }
+  }
+  return polylines;
+}
+
+// Build 3D geometry from polylines
+function buildModel(polylines, scale, radius, height) {
+  const group = new THREE.Group();
+  const material = new THREE.MeshStandardMaterial({
+    color: 0xffffff,
+    roughness: 0.4,
+    metalness: 0.1
+  });
+
+  // Track vertex positions for round caps (avoid duplicates)
+  const vertexSet = new Set();
+  const halfH = height / 2;
+
+  for (const poly of polylines) {
+    for (let i = 0; i < poly.length - 1; i++) {
+      const p1 = poly[i];
+      const p2 = poly[i + 1];
+
+      const x1 = p1.x * scale, y1 = -p1.y * scale; // flip Y for 3D
+      const x2 = p2.x * scale, y2 = -p2.y * scale;
+
+      const dx = x2 - x1, dy = y2 - y1;
+      const len = Math.sqrt(dx * dx + dy * dy);
+      if (len < 0.001) continue;
+
+      // Box for segment
+      const box = new THREE.BoxGeometry(len, radius * 2, height);
+      const mesh = new THREE.Mesh(box, material);
+
+      const mx = (x1 + x2) / 2;
+      const my = (y1 + y2) / 2;
+      mesh.position.set(mx, my, halfH);
+      mesh.rotation.z = Math.atan2(dy, dx);
+      group.add(mesh);
+
+      // Cylinder caps at vertices
+      const key1 = `${x1.toFixed(3)},${y1.toFixed(3)}`;
+      const key2 = `${x2.toFixed(3)},${y2.toFixed(3)}`;
+
+      if (!vertexSet.has(key1)) {
+        vertexSet.add(key1);
+        const cyl = new THREE.Mesh(
+          new THREE.CylinderGeometry(radius, radius, height, CYL_SEGS),
+          material
+        );
+        cyl.position.set(x1, y1, halfH);
+        cyl.rotation.x = Math.PI / 2; // orient along Z
+        group.add(cyl);
+      }
+
+      if (!vertexSet.has(key2)) {
+        vertexSet.add(key2);
+        const cyl = new THREE.Mesh(
+          new THREE.CylinderGeometry(radius, radius, height, CYL_SEGS),
+          material
+        );
+        cyl.position.set(x2, y2, halfH);
+        cyl.rotation.x = Math.PI / 2;
+        group.add(cyl);
+      }
+    }
+  }
+
+  return group;
+}
+
+// Scene setup
+function initScene(canvas, container) {
+  const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+  renderer.setPixelRatio(window.devicePixelRatio);
+  renderer.setSize(container.clientWidth, container.clientHeight);
+  renderer.setClearColor(0x0d0d1a);
+
+  const scene = new THREE.Scene();
+
+  const camera = new THREE.PerspectiveCamera(
+    45,
+    container.clientWidth / container.clientHeight,
+    0.1,
+    10000
+  );
+
+  // Lighting
+  const ambient = new THREE.AmbientLight(0xffffff, 0.5);
+  scene.add(ambient);
+  const dirLight = new THREE.DirectionalLight(0xffffff, 1.0);
+  dirLight.position.set(50, 50, 100);
+  scene.add(dirLight);
+  const dirLight2 = new THREE.DirectionalLight(0x8888cc, 0.4);
+  dirLight2.position.set(-50, -30, 50);
+  scene.add(dirLight2);
+
+  const controls = new OrbitControls(camera, canvas);
+  controls.enableDamping = true;
+  controls.dampingFactor = 0.1;
+
+  return { renderer, scene, camera, controls };
+}
+
+// Frame camera to fit model
+function frameMesh(group, camera, controls) {
+  const box = new THREE.Box3().setFromObject(group);
+  const center = box.getCenter(new THREE.Vector3());
+  const size = box.getSize(new THREE.Vector3());
+
+  controls.target.copy(center);
+
+  const maxDim = Math.max(size.x, size.y, size.z);
+  const fov = camera.fov * (Math.PI / 180);
+  const dist = maxDim / (2 * Math.tan(fov / 2)) * 1.5;
+
+  camera.position.set(center.x, center.y, center.z + dist);
+  camera.near = dist / 100;
+  camera.far = dist * 10;
+  camera.updateProjectionMatrix();
+
+  controls.update();
+}
+
+// ─── Inline 3D Panel Logic ──────────────────────────────────────────
+const panel3D = document.getElementById('model3DPanel');
+const slots = document.querySelectorAll('.model3d-slot');
+const canvases = document.querySelectorAll('.model3d-canvas');
+const loadingEls = document.querySelectorAll('.model3d-loading');
+const dimsEl = document.getElementById('model3DDims');
+const btnSTL = document.getElementById('btnDownloadSTL');
+
+let sceneStates = [null, null, null];
+
+function disposeScene(index) {
+  const s = sceneStates[index];
+  if (s) {
+    cancelAnimationFrame(s.animId);
+    s.renderer.dispose();
+    s.scene.traverse(obj => {
+      if (obj.geometry) obj.geometry.dispose();
+      if (obj.material) {
+        if (Array.isArray(obj.material)) obj.material.forEach(m => m.dispose());
+        else obj.material.dispose();
+      }
+    });
+    sceneStates[index] = null;
+  }
+}
+
+function disposeAll() {
+  for (let i = 0; i < 3; i++) disposeScene(i);
+}
+
+function render3DPreviews() {
+  const allSvgs = window._getAllSvgs();
+  if (!allSvgs || !allSvgs.length) {
+    panel3D.style.display = 'none';
+    disposeAll();
+    return;
+  }
+
+  panel3D.style.display = '';
+  dimsEl.textContent = '';
+  disposeAll();
+
+  for (let v = 0; v < 3; v++) {
+    loadingEls[v].style.display = '';
+    loadingEls[v].textContent = 'Loading...';
+    loadingEls[v].style.color = '#6666aa';
+  }
+
+  requestAnimationFrame(() => {
+    for (let v = 0; v < 3; v++) {
+      try {
+        const polylines = parseSvgPathsToPolylines(allSvgs[v]);
+        const group = buildModel(polylines, SCALE, RADIUS, HEIGHT);
+
+        const { renderer, scene, camera, controls } = initScene(canvases[v], slots[v]);
+        scene.add(group);
+        frameMesh(group, camera, controls);
+
+        loadingEls[v].style.display = 'none';
+
+        if (v === 0) {
+          const bbox = new THREE.Box3().setFromObject(group);
+          const sz = bbox.getSize(new THREE.Vector3());
+          dimsEl.textContent = `${sz.x.toFixed(1)} x ${sz.y.toFixed(1)} x ${sz.z.toFixed(1)} mm`;
+        }
+
+        let animId;
+        const thisV = v;
+        function animate() {
+          animId = requestAnimationFrame(animate);
+          controls.update();
+          renderer.render(scene, camera);
+        }
+        animate();
+
+        sceneStates[v] = { renderer, scene, camera, controls, animId, group };
+      } catch (e) {
+        loadingEls[v].textContent = 'Error: ' + e.message;
+        loadingEls[v].style.color = '#cc6666';
+      }
+    }
+  });
+}
+
+// Auto-render when encoding completes
+const observer = new MutationObserver(() => {
+  if (window._getAllSvgs() && window._getAllSvgs().length) {
+    render3DPreviews();
+  } else {
+    panel3D.style.display = 'none';
+    disposeAll();
+  }
+});
+observer.observe(document.getElementById('previewArea'), { childList: true });
+
+// Download all 3 variant STLs
+btnSTL.addEventListener('click', () => {
+  const allSvgs = window._getAllSvgs();
+  if (!allSvgs || !allSvgs.length) return;
+
+  const text = window._getInputText() || 'PATTERN';
+  const baseName = text.replace(/[^A-Z0-9]/g, '_').replace(/_+/g, '_').replace(/^_|_$/g, '') || 'PATTERN';
+
+  const exporter = new STLExporter();
+
+  for (let v = 0; v < allSvgs.length; v++) {
+    const polylines = parseSvgPathsToPolylines(allSvgs[v]);
+    const group = buildModel(polylines, SCALE, RADIUS, HEIGHT);
+
+    // Wrap in a temp scene for export
+    const tempScene = new THREE.Scene();
+    tempScene.add(group);
+
+    const result = exporter.parse(tempScene, { binary: true });
+    const blob = new Blob([result], { type: 'application/octet-stream' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${baseName}_v${v + 1}.stl`;
+    a.click();
+    URL.revokeObjectURL(url);
+
+    // Dispose temp geometry
+    tempScene.traverse(obj => {
+      if (obj.geometry) obj.geometry.dispose();
+      if (obj.material) {
+        if (Array.isArray(obj.material)) obj.material.forEach(m => m.dispose());
+        else obj.material.dispose();
+      }
+    });
+  }
+});
+</script>
+
 </body>
 </html>
