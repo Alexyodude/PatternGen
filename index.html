@@ -1991,11 +1991,19 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { STLExporter } from 'three/addons/exporters/STLExporter.js';
 
-const SCALE = 3 / 61.745;  // SVG units → mm (stroke width 61.745 → 3mm diameter)
-const RADIUS = 1.5;        // mm (half of 3mm stroke)
-const HEIGHT = 5;           // mm extrusion height
-const CYL_SEGS = 16;       // cylinder segments
-const BEZIER_SAMPLES = 20; // samples per bezier curve
+// Target: model height (Y) ≤ 25mm, stroke width = 3mm
+// Single panel: node span = (ROWS-1)*CELL = 444.564 SVG units
+// Full span including stroke caps = 444.564 + SW = 506.309 SVG units
+// SCALE = 25 / 506.309 ≈ 0.04938 → stroke = SW * SCALE ≈ 3.05mm
+// We use stroke=3mm exactly → SCALE = 3/SW, giving height ≈ 24.6mm (< 25mm) ✓
+const TARGET_HEIGHT = 25;   // mm max model height
+const STROKE_WIDTH = 3;     // mm
+const SW_SVG = 61.745;      // SVG stroke width units
+const SCALE = STROKE_WIDTH / SW_SVG;  // SVG units → mm
+const RADIUS = STROKE_WIDTH / 2;      // mm, half stroke for round caps
+const EXTRUDE = 3;           // mm extrusion depth (Z)
+const CYL_SEGS = 16;
+const BEZIER_SAMPLES = 20;
 
 // Parse SVG path data into polylines of {x, y} points
 function parseSvgPathsToPolylines(svgString) {
@@ -2112,8 +2120,10 @@ function parseSvgPathsToPolylines(svgString) {
   return polylines;
 }
 
-// Build 3D geometry from polylines
-function buildModel(polylines, scale, radius, height) {
+// Build 3D geometry from polylines.
+// Bakes all transforms directly into geometry (no mesh.position/rotation)
+// so STL export produces correct coordinates.
+function buildModel(polylines, scale, radius, extrude) {
   const group = new THREE.Group();
   const material = new THREE.MeshStandardMaterial({
     color: 0xffffff,
@@ -2121,56 +2131,52 @@ function buildModel(polylines, scale, radius, height) {
     metalness: 0.1
   });
 
-  // Track vertex positions for round caps (avoid duplicates)
   const vertexSet = new Set();
-  const halfH = height / 2;
+  const halfE = extrude / 2;
+
+  // Reusable matrix for baking transforms
+  const mat = new THREE.Matrix4();
 
   for (const poly of polylines) {
     for (let i = 0; i < poly.length - 1; i++) {
       const p1 = poly[i];
       const p2 = poly[i + 1];
 
-      const x1 = p1.x * scale, y1 = -p1.y * scale; // flip Y for 3D
+      const x1 = p1.x * scale, y1 = -p1.y * scale;
       const x2 = p2.x * scale, y2 = -p2.y * scale;
 
       const dx = x2 - x1, dy = y2 - y1;
       const len = Math.sqrt(dx * dx + dy * dy);
       if (len < 0.001) continue;
 
-      // Box for segment
-      const box = new THREE.BoxGeometry(len, radius * 2, height);
-      const mesh = new THREE.Mesh(box, material);
+      // Box for segment — bake position + rotation into geometry
+      const box = new THREE.BoxGeometry(len, radius * 2, extrude);
+      const angle = Math.atan2(dy, dx);
+      mat.makeRotationZ(angle);
+      mat.setPosition((x1 + x2) / 2, (y1 + y2) / 2, halfE);
+      box.applyMatrix4(mat);
+      group.add(new THREE.Mesh(box, material));
 
-      const mx = (x1 + x2) / 2;
-      const my = (y1 + y2) / 2;
-      mesh.position.set(mx, my, halfH);
-      mesh.rotation.z = Math.atan2(dy, dx);
-      group.add(mesh);
-
-      // Cylinder caps at vertices
+      // Cylinder caps at vertices — bake position + rotation into geometry
       const key1 = `${x1.toFixed(3)},${y1.toFixed(3)}`;
       const key2 = `${x2.toFixed(3)},${y2.toFixed(3)}`;
 
       if (!vertexSet.has(key1)) {
         vertexSet.add(key1);
-        const cyl = new THREE.Mesh(
-          new THREE.CylinderGeometry(radius, radius, height, CYL_SEGS),
-          material
-        );
-        cyl.position.set(x1, y1, halfH);
-        cyl.rotation.x = Math.PI / 2; // orient along Z
-        group.add(cyl);
+        const cyl = new THREE.CylinderGeometry(radius, radius, extrude, CYL_SEGS);
+        mat.makeRotationX(Math.PI / 2);
+        mat.setPosition(x1, y1, halfE);
+        cyl.applyMatrix4(mat);
+        group.add(new THREE.Mesh(cyl, material));
       }
 
       if (!vertexSet.has(key2)) {
         vertexSet.add(key2);
-        const cyl = new THREE.Mesh(
-          new THREE.CylinderGeometry(radius, radius, height, CYL_SEGS),
-          material
-        );
-        cyl.position.set(x2, y2, halfH);
-        cyl.rotation.x = Math.PI / 2;
-        group.add(cyl);
+        const cyl = new THREE.CylinderGeometry(radius, radius, extrude, CYL_SEGS);
+        mat.makeRotationX(Math.PI / 2);
+        mat.setPosition(x2, y2, halfE);
+        cyl.applyMatrix4(mat);
+        group.add(new THREE.Mesh(cyl, material));
       }
     }
   }
@@ -2282,7 +2288,7 @@ function render3DPreviews() {
     for (let v = 0; v < 3; v++) {
       try {
         const polylines = parseSvgPathsToPolylines(allSvgs[v]);
-        const group = buildModel(polylines, SCALE, RADIUS, HEIGHT);
+        const group = buildModel(polylines, SCALE, RADIUS, EXTRUDE);
 
         const { renderer, scene, camera, controls } = initScene(canvases[v], slots[v]);
         scene.add(group);
@@ -2340,7 +2346,7 @@ btnSTL.addEventListener('click', () => {
 
   for (let v = 0; v < allSvgs.length; v++) {
     const polylines = parseSvgPathsToPolylines(allSvgs[v]);
-    const group = buildModel(polylines, SCALE, RADIUS, HEIGHT);
+    const group = buildModel(polylines, SCALE, RADIUS, EXTRUDE);
 
     const tempScene = new THREE.Scene();
     tempScene.add(group);
