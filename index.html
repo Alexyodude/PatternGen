@@ -2344,6 +2344,7 @@ btnSTL.addEventListener('click', () => {
 
     const tempScene = new THREE.Scene();
     tempScene.add(group);
+    tempScene.updateMatrixWorld(true);
 
     const result = exporter.parse(tempScene, { binary: true });
     const blob = new Blob([result], { type: 'application/octet-stream' });
