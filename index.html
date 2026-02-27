@@ -2121,21 +2121,21 @@ function parseSvgPathsToPolylines(svgString) {
 }
 
 // Build 3D geometry from polylines.
-// Bakes all transforms directly into geometry (no mesh.position/rotation)
-// so STL export produces correct coordinates.
+// Merges all geometry into a single BufferGeometry for clean STL export.
 function buildModel(polylines, scale, radius, extrude) {
-  const group = new THREE.Group();
   const material = new THREE.MeshStandardMaterial({
-    color: 0xffffff,
-    roughness: 0.4,
-    metalness: 0.1
+    color: 0xffffff, roughness: 0.4, metalness: 0.1, side: THREE.DoubleSide
   });
 
   const vertexSet = new Set();
   const halfE = extrude / 2;
+  const geometries = [];
 
-  // Reusable matrix for baking transforms
+  const pos = new THREE.Vector3();
+  const quat = new THREE.Quaternion();
+  const scl = new THREE.Vector3(1, 1, 1);
   const mat = new THREE.Matrix4();
+  const euler = new THREE.Euler();
 
   for (const poly of polylines) {
     for (let i = 0; i < poly.length - 1; i++) {
@@ -2149,39 +2149,94 @@ function buildModel(polylines, scale, radius, extrude) {
       const len = Math.sqrt(dx * dx + dy * dy);
       if (len < 0.001) continue;
 
-      // Box for segment — bake position + rotation into geometry
+      // Box for segment
       const box = new THREE.BoxGeometry(len, radius * 2, extrude);
       const angle = Math.atan2(dy, dx);
-      mat.makeRotationZ(angle);
-      mat.setPosition((x1 + x2) / 2, (y1 + y2) / 2, halfE);
+      pos.set((x1 + x2) / 2, (y1 + y2) / 2, halfE);
+      euler.set(0, 0, angle);
+      quat.setFromEuler(euler);
+      mat.compose(pos, quat, scl);
       box.applyMatrix4(mat);
-      group.add(new THREE.Mesh(box, material));
+      box.computeVertexNormals();
+      geometries.push(box);
 
-      // Cylinder caps at vertices — bake position + rotation into geometry
+      // Cylinder caps at vertices
       const key1 = `${x1.toFixed(3)},${y1.toFixed(3)}`;
       const key2 = `${x2.toFixed(3)},${y2.toFixed(3)}`;
 
-      if (!vertexSet.has(key1)) {
-        vertexSet.add(key1);
-        const cyl = new THREE.CylinderGeometry(radius, radius, extrude, CYL_SEGS);
-        mat.makeRotationX(Math.PI / 2);
-        mat.setPosition(x1, y1, halfE);
-        cyl.applyMatrix4(mat);
-        group.add(new THREE.Mesh(cyl, material));
-      }
-
-      if (!vertexSet.has(key2)) {
-        vertexSet.add(key2);
-        const cyl = new THREE.CylinderGeometry(radius, radius, extrude, CYL_SEGS);
-        mat.makeRotationX(Math.PI / 2);
-        mat.setPosition(x2, y2, halfE);
-        cyl.applyMatrix4(mat);
-        group.add(new THREE.Mesh(cyl, material));
+      for (const [key, vx, vy] of [[key1, x1, y1], [key2, x2, y2]]) {
+        if (!vertexSet.has(key)) {
+          vertexSet.add(key);
+          const cyl = new THREE.CylinderGeometry(radius, radius, extrude, CYL_SEGS);
+          pos.set(vx, vy, halfE);
+          euler.set(Math.PI / 2, 0, 0);
+          quat.setFromEuler(euler);
+          mat.compose(pos, quat, scl);
+          cyl.applyMatrix4(mat);
+          cyl.computeVertexNormals();
+          geometries.push(cyl);
+        }
       }
     }
   }
 
+  // Merge all geometries into one for clean STL export
+  const merged = mergeGeometries(geometries);
+  merged.computeVertexNormals();
+  const mesh = new THREE.Mesh(merged, material);
+
+  // Dispose individual geometries
+  for (const g of geometries) g.dispose();
+
+  const group = new THREE.Group();
+  group.add(mesh);
   return group;
+}
+
+// Merge array of BufferGeometry into one
+function mergeGeometries(geometries) {
+  let totalVerts = 0, totalIdx = 0;
+  for (const g of geometries) {
+    totalVerts += g.attributes.position.count;
+    totalIdx += g.index ? g.index.count : g.attributes.position.count;
+  }
+
+  const positions = new Float32Array(totalVerts * 3);
+  const normals = new Float32Array(totalVerts * 3);
+  const indices = new Uint32Array(totalIdx);
+
+  let vertOff = 0, idxOff = 0, vertCount = 0;
+  for (const g of geometries) {
+    const pos = g.attributes.position;
+    const nrm = g.attributes.normal;
+    const idx = g.index;
+
+    for (let i = 0; i < pos.count * 3; i++) {
+      positions[vertOff + i] = pos.array[i];
+      if (nrm) normals[vertOff + i] = nrm.array[i];
+    }
+
+    if (idx) {
+      for (let i = 0; i < idx.count; i++) {
+        indices[idxOff + i] = idx.array[i] + vertCount;
+      }
+      idxOff += idx.count;
+    } else {
+      for (let i = 0; i < pos.count; i++) {
+        indices[idxOff + i] = vertCount + i;
+      }
+      idxOff += pos.count;
+    }
+
+    vertOff += pos.count * 3;
+    vertCount += pos.count;
+  }
+
+  const merged = new THREE.BufferGeometry();
+  merged.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+  merged.setAttribute('normal', new THREE.BufferAttribute(normals, 3));
+  merged.setIndex(new THREE.BufferAttribute(indices, 1));
+  return merged;
 }
 
 // Scene setup
