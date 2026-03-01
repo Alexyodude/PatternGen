@@ -498,6 +498,7 @@ PatternDecoder &mdash; SVG &rarr; grid &rarr; text</pre>
       <button id="btnCopy" disabled>Copy SVG</button>
       <button id="btnShare" disabled>Share Link</button>
       <button id="btnDownloadSTL" disabled>Download All STL</button>
+      <button id="btnDownloadOutlineSVG" disabled>Download Outline SVG</button>
     </div>
   </div>
 
@@ -1608,6 +1609,7 @@ const dropZone    = document.getElementById('dropZone');
 const fileInput   = document.getElementById('fileInput');
 const btnShare    = document.getElementById('btnShare');
 const btnSTL      = document.getElementById('btnDownloadSTL');
+const btnOutlineSVG = document.getElementById('btnDownloadOutlineSVG');
 const toastEl     = document.getElementById('toast');
 const docModal    = document.getElementById('docModal');
 const btnDocs     = document.getElementById('btnDocs');
@@ -1654,6 +1656,7 @@ btnEncode.addEventListener('click', () => {
     btnCopy.disabled = true;
     btnShare.disabled = true;
     btnSTL.disabled = true;
+    btnOutlineSVG.disabled = true;
     currentSvgs = [];
     return;
   }
@@ -1687,6 +1690,7 @@ btnEncode.addEventListener('click', () => {
     btnCopy.disabled = false;
     btnShare.disabled = false;
     btnSTL.disabled = false;
+    btnOutlineSVG.disabled = false;
 
     if (isValid) {
       showToast('3 variants encoded — decodes correctly via intersection');
@@ -2569,6 +2573,73 @@ btnSTL.addEventListener('click', () => {
     URL.revokeObjectURL(url);
 
     solidGeo.dispose();
+  }
+});
+
+// ─── Outline SVG Export ─────────────────────────────────────────────
+// Exports stroke outlines as closed filled polygons (for Fusion 360 sketch → extrude)
+
+function ringsToSvgPath(rings) {
+  let d = '';
+  for (const ring of rings) {
+    if (ring.length < 3) continue;
+    d += `M${ring[0].x.toFixed(3)} ${ring[0].y.toFixed(3)}`;
+    for (let i = 1; i < ring.length; i++) {
+      d += `L${ring[i].x.toFixed(3)} ${ring[i].y.toFixed(3)}`;
+    }
+    d += 'Z';
+  }
+  return d;
+}
+
+function buildOutlineSvg(svgString, scale, radius) {
+  const polylines = parseSvgPathsToPolylines(svgString);
+  const rings = polylinesToSolidOutline(polylines, scale, radius);
+  if (!rings.length) return null;
+
+  // Compute bounding box
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  for (const ring of rings) {
+    for (const p of ring) {
+      if (p.x < minX) minX = p.x;
+      if (p.y < minY) minY = p.y;
+      if (p.x > maxX) maxX = p.x;
+      if (p.y > maxY) maxY = p.y;
+    }
+  }
+  const pad = 0.5;
+  minX -= pad; minY -= pad; maxX += pad; maxY += pad;
+  const w = maxX - minX;
+  const h = maxY - minY;
+
+  const pathD = ringsToSvgPath(rings);
+
+  return [
+    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="${minX.toFixed(3)} ${minY.toFixed(3)} ${w.toFixed(3)} ${h.toFixed(3)}" width="${w.toFixed(3)}mm" height="${h.toFixed(3)}mm">`,
+    `<path d="${pathD}" fill="black" fill-rule="nonzero"/>`,
+    `</svg>`
+  ].join('\n');
+}
+
+const btnOutlineSVG = document.getElementById('btnDownloadOutlineSVG');
+btnOutlineSVG.addEventListener('click', () => {
+  const allSvgs = window._getAllSvgs();
+  if (!allSvgs || !allSvgs.length) return;
+
+  const text = window._getInputText() || 'PATTERN';
+  const baseName = text.replace(/[^A-Z0-9]/g, '_').replace(/_+/g, '_').replace(/^_|_$/g, '') || 'PATTERN';
+
+  for (let v = 0; v < allSvgs.length; v++) {
+    const outlineSvg = buildOutlineSvg(allSvgs[v], SCALE, RADIUS);
+    if (!outlineSvg) continue;
+
+    const blob = new Blob([outlineSvg], { type: 'image/svg+xml' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${baseName}_outline_v${v + 1}.svg`;
+    a.click();
+    URL.revokeObjectURL(url);
   }
 });
 </script>
