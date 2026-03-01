@@ -569,6 +569,8 @@ PatternDecoder &mdash; SVG &rarr; grid &rarr; text</pre>
 <div class="toast" id="toast"></div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/js-clipper@1.0.1/clipper.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/earcut@2.2.4/dist/earcut.min.js"></script>
 <script>
 // ─── Constants ───────────────────────────────────────────────────────
 const COLS = 17;
@@ -2389,7 +2391,156 @@ const observer = new MutationObserver(() => {
 });
 observer.observe(document.getElementById('previewArea'), { childList: true });
 
-// Download all 3 variant STLs
+// ─── Solid STL Export (2D offset → union → extrude) ─────────────────
+// Mirrors the Python svg_to_stl.py approach: Clipper offset + union + earcut triangulation
+
+const CLIPPER_SCALE = 1000; // integer precision for Clipper
+
+// Buffer polylines into 2D polygons, union them, return array of polygon rings
+function polylinesToSolidOutline(polylines, scale, radius) {
+  const co = new ClipperLib.ClipperOffset();
+  const solution = new ClipperLib.Paths();
+
+  for (const pl of polylines) {
+    if (pl.length < 2) continue;
+    const path = pl.map(p => ({
+      X: Math.round(p.x * scale * CLIPPER_SCALE),
+      Y: Math.round(-p.y * scale * CLIPPER_SCALE) // flip Y
+    }));
+    co.AddPath(path, ClipperLib.JoinType.jtRound, ClipperLib.EndType.etOpenRound);
+  }
+
+  co.ArcTolerance = CLIPPER_SCALE * 0.05; // ~0.05mm arc resolution
+  co.Execute(solution, radius * CLIPPER_SCALE);
+
+  // Clean up with Clipper union to merge overlapping polygons
+  const clipper = new ClipperLib.Clipper();
+  const merged = new ClipperLib.Paths();
+  clipper.AddPaths(solution, ClipperLib.PolyType.ptSubject, true);
+  clipper.Execute(ClipperLib.ClipType.ctUnion, merged,
+    ClipperLib.PolyFillType.pftNonZero, ClipperLib.PolyFillType.pftNonZero);
+
+  // Convert back to float mm coordinates
+  return merged.map(ring => ring.map(pt => ({
+    x: pt.X / CLIPPER_SCALE,
+    y: pt.Y / CLIPPER_SCALE
+  })));
+}
+
+// Classify rings as outer (CCW in screen coords) or holes (CW)
+function classifyRings(rings) {
+  return rings.map(ring => {
+    const area = ClipperLib.Clipper.Area(
+      ring.map(p => ({ X: Math.round(p.x * 1000), Y: Math.round(p.y * 1000) }))
+    );
+    return { ring, isHole: area < 0 };
+  });
+}
+
+// Assign holes to their containing outer rings
+function buildPolygons(classified) {
+  const outers = classified.filter(c => !c.isHole);
+  const holes = classified.filter(c => c.isHole);
+
+  // For each outer, collect holes that are inside it
+  const polygons = outers.map(o => ({ outer: o.ring, holes: [] }));
+
+  for (const h of holes) {
+    // Test first point of hole against each outer
+    const pt = { X: Math.round(h.ring[0].x * 1000), Y: Math.round(h.ring[0].y * 1000) };
+    for (const poly of polygons) {
+      const outerPath = poly.outer.map(p => ({
+        X: Math.round(p.x * 1000), Y: Math.round(p.y * 1000)
+      }));
+      if (ClipperLib.Clipper.PointInPolygon(pt, outerPath) !== 0) {
+        poly.holes.push(h.ring);
+        break;
+      }
+    }
+  }
+  return polygons;
+}
+
+// Triangulate a polygon (outer + holes) using earcut
+function triangulatePolygon(outer, holes) {
+  const coords = [];
+  const holeIndices = [];
+
+  for (const p of outer) { coords.push(p.x, p.y); }
+  for (const hole of holes) {
+    holeIndices.push(coords.length / 2);
+    for (const p of hole) { coords.push(p.x, p.y); }
+  }
+
+  const indices = earcut(coords, holeIndices.length ? holeIndices : null, 2);
+  const verts2D = [];
+  for (let i = 0; i < coords.length; i += 2) {
+    verts2D.push({ x: coords[i], y: coords[i + 1] });
+  }
+  return { verts2D, indices };
+}
+
+// Extrude 2D triangulation into a 3D solid mesh (top + bottom + walls)
+function extrudeToGeometry(polygons, extrude) {
+  const positions = [];
+  const indices = [];
+  let vertOff = 0;
+
+  for (const poly of polygons) {
+    const { verts2D, indices: triIdx } = triangulatePolygon(poly.outer, poly.holes);
+    const n = verts2D.length;
+
+    // Bottom face (z=0) — vertices
+    for (const v of verts2D) positions.push(v.x, v.y, 0);
+    // Top face (z=extrude) — vertices
+    for (const v of verts2D) positions.push(v.x, v.y, extrude);
+
+    // Bottom triangles (flip winding for outward normals)
+    for (let i = 0; i < triIdx.length; i += 3) {
+      indices.push(vertOff + triIdx[i], vertOff + triIdx[i + 2], vertOff + triIdx[i + 1]);
+    }
+    // Top triangles
+    for (let i = 0; i < triIdx.length; i += 3) {
+      indices.push(vertOff + n + triIdx[i], vertOff + n + triIdx[i + 1], vertOff + n + triIdx[i + 2]);
+    }
+
+    // Side walls for each ring
+    const allRings = [poly.outer, ...poly.holes];
+    let ringStart = 0;
+    for (const ring of allRings) {
+      const rn = ring.length;
+      for (let i = 0; i < rn; i++) {
+        const j = (i + 1) % rn;
+        const bi = vertOff + ringStart + i;
+        const bj = vertOff + ringStart + j;
+        const ti = vertOff + n + ringStart + i;
+        const tj = vertOff + n + ringStart + j;
+        // Two triangles per quad
+        indices.push(bi, bj, tj);
+        indices.push(bi, tj, ti);
+      }
+      ringStart += rn;
+    }
+
+    vertOff += n * 2;
+  }
+
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+  geo.setIndex(indices);
+  geo.computeVertexNormals();
+  return geo;
+}
+
+// Build a watertight solid STL geometry from SVG polylines
+function buildSolidGeometry(polylines, scale, radius, extrude) {
+  const rings = polylinesToSolidOutline(polylines, scale, radius);
+  const classified = classifyRings(rings);
+  const polygons = buildPolygons(classified);
+  return extrudeToGeometry(polygons, extrude);
+}
+
+// Download all 3 variant STLs as watertight solids
 btnSTL.addEventListener('click', () => {
   const allSvgs = window._getAllSvgs();
   if (!allSvgs || !allSvgs.length) return;
@@ -2401,10 +2552,11 @@ btnSTL.addEventListener('click', () => {
 
   for (let v = 0; v < allSvgs.length; v++) {
     const polylines = parseSvgPathsToPolylines(allSvgs[v]);
-    const group = buildModel(polylines, SCALE, RADIUS, EXTRUDE);
+    const solidGeo = buildSolidGeometry(polylines, SCALE, RADIUS, EXTRUDE);
 
+    const mesh = new THREE.Mesh(solidGeo);
     const tempScene = new THREE.Scene();
-    tempScene.add(group);
+    tempScene.add(mesh);
     tempScene.updateMatrixWorld(true);
 
     const result = exporter.parse(tempScene, { binary: true });
@@ -2416,13 +2568,7 @@ btnSTL.addEventListener('click', () => {
     a.click();
     URL.revokeObjectURL(url);
 
-    tempScene.traverse(obj => {
-      if (obj.geometry) obj.geometry.dispose();
-      if (obj.material) {
-        if (Array.isArray(obj.material)) obj.material.forEach(m => m.dispose());
-        else obj.material.dispose();
-      }
-    });
+    solidGeo.dispose();
   }
 });
 </script>
