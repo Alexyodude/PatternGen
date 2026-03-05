@@ -545,18 +545,19 @@ PatternDecoder &mdash; SVG &rarr; grid &rarr; text</pre>
 
   <!-- Decode Section -->
   <div class="panel">
-    <div class="panel-label">Decode Pattern (drop or select all 3 variant SVGs)</div>
+    <div class="panel-label">Decode Pattern (drop or select 3 variant files: SVG, STL, or images)</div>
     <div class="decode-area">
       <textarea id="svgInput" placeholder="Paste all 3 SVG variants here (separated by blank lines) to decode..."></textarea>
       <div class="drop-zone" id="dropZone">
-        <span>Drop 3 SVGs</span>
-        <span>or click</span>
-        <input type="file" id="fileInput" accept=".svg" multiple>
+        <span>Drop 3 files</span>
+        <span>SVG, STL, or Image</span>
+        <input type="file" id="fileInput" accept=".svg,.stl,.png,.jpg,.jpeg,.webp,.bmp" multiple>
       </div>
     </div>
     <div class="btn-row">
       <button id="btnDecode">Decode (3 variants)</button>
     </div>
+    <div id="decodeStatus" style="font-size: 0.78rem; color: #7777aa; margin-top: 0.4rem; min-height: 1.2em;"></div>
     <div class="decoded-output" id="decodedOutput"></div>
   </div>
 
@@ -1442,15 +1443,14 @@ class PatternDecoder {
     return { text, valid: true };
   }
 
-  // Decode from 3 variant SVGs by AND-intersecting their H/V edges.
-  // Edges present in all 3 = data, edges that differ = random filler.
-  static decode3(svgStrings) {
-    if (!Array.isArray(svgStrings) || svgStrings.length !== 3)
-      return { text: '', valid: false, error: 'Requires exactly 3 variant SVGs' };
-
-    const allPanelBits = svgStrings.map(s => PatternDecoder._extractGrids(s));
+  // AND-intersect 3 sets of bit arrays and decode.
+  // allPanelBits: array of 3 arrays, each containing per-panel 148-bit arrays.
+  // Reusable by STLDecoder and PhotoDecoder.
+  static decode3FromBits(allPanelBits) {
+    if (!Array.isArray(allPanelBits) || allPanelBits.length !== 3)
+      return { text: '', valid: false, error: 'Requires exactly 3 variants' };
     if (allPanelBits.some(p => !p))
-      return { text: '', valid: false, error: 'Failed to parse one or more SVGs' };
+      return { text: '', valid: false, error: 'Failed to parse one or more inputs' };
 
     const panelCount = allPanelBits[0].length;
     if (!allPanelBits.every(p => p.length === panelCount))
@@ -1458,7 +1458,6 @@ class PatternDecoder {
 
     const results = [];
     for (let p = 0; p < panelCount; p++) {
-      // AND all 3 variants: bit = 1 only if all 3 have it
       const bits = new Array(TOTAL_BITS);
       for (let i = 0; i < TOTAL_BITS; i++) {
         bits[i] = allPanelBits[0][p][i] & allPanelBits[1][p][i] & allPanelBits[2][p][i];
@@ -1470,6 +1469,14 @@ class PatternDecoder {
     const fullText = results.map(r => r.text).join('');
     const firstError = results.find(r => !r.valid);
     return { text: fullText, valid: allValid, panels: results, error: firstError?.error || null };
+  }
+
+  // Decode from 3 variant SVGs by AND-intersecting their H/V edges.
+  static decode3(svgStrings) {
+    if (!Array.isArray(svgStrings) || svgStrings.length !== 3)
+      return { text: '', valid: false, error: 'Requires exactly 3 variant SVGs' };
+    const allPanelBits = svgStrings.map(s => PatternDecoder._extractGrids(s));
+    return PatternDecoder.decode3FromBits(allPanelBits);
   }
 
   // Single-SVG decode (legacy, works only on SVGs without random fill)
@@ -1585,6 +1592,233 @@ class PatternDecoder {
       }
     }
     return edges;
+  }
+}
+
+// ─── STLDecoder ──────────────────────────────────────────────────────
+// Decodes binary STL files (exported by this app) back to text.
+// Strategy: parse triangles → project to XY → rasterize on canvas → sample edge midpoints.
+class STLDecoder {
+  // STL export uses SCALE = 3mm / SW, Y-flipped
+  static STL_SCALE = 3 / SW;
+
+  static parseSTL(buffer) {
+    const view = new DataView(buffer);
+    if (buffer.byteLength < 84) throw new Error('Invalid STL file (too small)');
+    const numTris = view.getUint32(80, true);
+    if (buffer.byteLength < 84 + numTris * 50)
+      throw new Error('Invalid STL file (truncated)');
+    const triangles = [];
+    let off = 84;
+    for (let i = 0; i < numTris; i++) {
+      off += 12; // skip normal
+      const v1 = { x: view.getFloat32(off, true), y: view.getFloat32(off + 4, true) }; off += 12;
+      const v2 = { x: view.getFloat32(off, true), y: view.getFloat32(off + 4, true) }; off += 12;
+      const v3 = { x: view.getFloat32(off, true), y: view.getFloat32(off + 4, true) }; off += 12;
+      off += 2; // attribute byte count
+      triangles.push([v1, v2, v3]);
+    }
+    return triangles;
+  }
+
+  static extractGrids(buffer) {
+    const triangles = this.parseSTL(buffer);
+    if (triangles.length === 0) return null;
+    const scale = this.STL_SCALE;
+
+    // Find XY bounding box
+    let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+    for (const [v1, v2, v3] of triangles) {
+      for (const v of [v1, v2, v3]) {
+        if (v.x < minX) minX = v.x;
+        if (v.x > maxX) maxX = v.x;
+        if (v.y < minY) minY = v.y;
+        if (v.y > maxY) maxY = v.y;
+      }
+    }
+
+    // Determine panel count from Y extent
+    const svgH = (maxY - minY) / scale;
+    const panelCount = Math.max(1, Math.round((svgH + PANEL_GAP) / (VB_H + PANEL_GAP)));
+
+    // Rasterize at 8 px/mm for clean edge sampling
+    const PX_PER_MM = 8;
+    const margin = 4;
+    const canvasW = Math.ceil((maxX - minX) * PX_PER_MM) + 2 * margin;
+    const canvasH = Math.ceil((maxY - minY) * PX_PER_MM) + 2 * margin;
+
+    const canvas = document.createElement('canvas');
+    canvas.width = canvasW;
+    canvas.height = canvasH;
+    const ctx = canvas.getContext('2d');
+    ctx.fillStyle = '#000';
+    ctx.fillRect(0, 0, canvasW, canvasH);
+    ctx.fillStyle = '#fff';
+
+    for (const [v1, v2, v3] of triangles) {
+      ctx.beginPath();
+      ctx.moveTo((v1.x - minX) * PX_PER_MM + margin, (v1.y - minY) * PX_PER_MM + margin);
+      ctx.lineTo((v2.x - minX) * PX_PER_MM + margin, (v2.y - minY) * PX_PER_MM + margin);
+      ctx.lineTo((v3.x - minX) * PX_PER_MM + margin, (v3.y - minY) * PX_PER_MM + margin);
+      ctx.closePath();
+      ctx.fill();
+    }
+
+    const imageData = ctx.getImageData(0, 0, canvasW, canvasH);
+    const pixels = imageData.data;
+
+    // Sample: check if STL geometry exists at (stlX, stlY) via 3x3 majority vote
+    const sample = (stlX, stlY) => {
+      const px = Math.round((stlX - minX) * PX_PER_MM + margin);
+      const py = Math.round((stlY - minY) * PX_PER_MM + margin);
+      let bright = 0;
+      for (let dy = -1; dy <= 1; dy++) {
+        for (let dx = -1; dx <= 1; dx++) {
+          const sx = px + dx, sy = py + dy;
+          if (sx >= 0 && sx < canvasW && sy >= 0 && sy < canvasH) {
+            if (pixels[(sy * canvasW + sx) * 4] > 128) bright++;
+          }
+        }
+      }
+      return bright >= 3 ? 1 : 0;
+    };
+
+    const panelBits = [];
+    for (let p = 0; p < panelCount; p++) {
+      const yOff = p * (VB_H + PANEL_GAP);
+      const grid = new CircuitGrid();
+
+      // H edges: midpoint at (PAD + (c+0.5)*CELL, yOff + PAD + r*CELL)
+      for (let r = 0; r < ROWS; r++) {
+        for (let c = 0; c < COLS - 1; c++) {
+          const stlX = (PAD + (c + 0.5) * CELL) * scale;
+          const stlY = -(yOff + PAD + r * CELL) * scale;
+          if (sample(stlX, stlY)) grid.setH(r, c, 1);
+        }
+      }
+
+      // V edges: midpoint at (PAD + c*CELL, yOff + PAD + (r+0.5)*CELL)
+      for (let r = 0; r < ROWS - 1; r++) {
+        for (let c = 0; c < COLS; c++) {
+          const stlX = (PAD + c * CELL) * scale;
+          const stlY = -(yOff + PAD + (r + 0.5) * CELL) * scale;
+          if (sample(stlX, stlY)) grid.setV(r, c, 1);
+        }
+      }
+
+      panelBits.push(grid.toBitArray());
+    }
+    return panelBits;
+  }
+}
+
+// ─── PhotoDecoder ────────────────────────────────────────────────────
+// Decodes photos/screenshots of the pattern back to text.
+// Strategy: find bright-pixel bounding box → map SVG grid coords → sample edge midpoints.
+// Works best with well-lit, straight-on captures. No perspective correction.
+class PhotoDecoder {
+  static extractGrids(img) {
+    const canvas = document.createElement('canvas');
+    const w = img.naturalWidth || img.width;
+    const h = img.naturalHeight || img.height;
+    canvas.width = w;
+    canvas.height = h;
+    const ctx = canvas.getContext('2d');
+    ctx.drawImage(img, 0, 0);
+
+    const imgData = ctx.getImageData(0, 0, w, h);
+    const pixels = imgData.data;
+
+    // Convert to grayscale
+    const gray = new Uint8Array(w * h);
+    for (let i = 0; i < w * h; i++) {
+      const off = i * 4;
+      gray[i] = pixels[off] * 0.299 + pixels[off + 1] * 0.587 + pixels[off + 2] * 0.114;
+    }
+
+    // Auto-detect background: sample image corners
+    const cornerSamples = [
+      gray[0], gray[w - 1], gray[(h - 1) * w], gray[(h - 1) * w + w - 1]
+    ];
+    const avgCorner = cornerSamples.reduce((a, b) => a + b, 0) / 4;
+    const darkBg = avgCorner < 128;
+    const threshold = darkBg ? 100 : 155;
+    const isBright = darkBg ? (v => v > threshold) : (v => v < threshold);
+
+    // Find bounding box of pattern pixels
+    let bMinX = w, bMaxX = 0, bMinY = h, bMaxY = 0;
+    for (let y = 0; y < h; y++) {
+      for (let x = 0; x < w; x++) {
+        if (isBright(gray[y * w + x])) {
+          if (x < bMinX) bMinX = x;
+          if (x > bMaxX) bMaxX = x;
+          if (y < bMinY) bMinY = y;
+          if (y > bMaxY) bMaxY = y;
+        }
+      }
+    }
+    if (bMaxX <= bMinX || bMaxY <= bMinY) return null;
+
+    const bboxW = bMaxX - bMinX;
+    const bboxH = bMaxY - bMinY;
+    const aspect = bboxW / bboxH;
+
+    // Determine panel count from aspect ratio
+    let bestPanels = 1, bestDiff = Infinity;
+    for (let p = 1; p <= 10; p++) {
+      const expectedH = p * VB_H + (p - 1) * PANEL_GAP;
+      const diff = Math.abs(aspect - VB_W / expectedH);
+      if (diff < bestDiff) { bestDiff = diff; bestPanels = p; }
+    }
+
+    const panelCount = bestPanels;
+    const totalSvgH = panelCount * VB_H + (panelCount - 1) * PANEL_GAP;
+
+    // Map SVG coords to image pixel coords
+    const svgToImgX = (svgX) => bMinX + (svgX / VB_W) * bboxW;
+    const svgToImgY = (svgY) => bMinY + (svgY / totalSvgH) * bboxH;
+
+    // Sampling radius proportional to stroke width in pixels
+    const strokePx = Math.max(2, Math.round((SW / VB_W) * bboxW / 3));
+
+    const sample = (imgX, imgY) => {
+      const cx = Math.round(imgX), cy = Math.round(imgY);
+      let bright = 0, total = 0;
+      const r = Math.min(strokePx, 8);
+      for (let dy = -r; dy <= r; dy++) {
+        for (let dx = -r; dx <= r; dx++) {
+          const px = cx + dx, py = cy + dy;
+          if (px >= 0 && px < w && py >= 0 && py < h) {
+            total++;
+            if (isBright(gray[py * w + px])) bright++;
+          }
+        }
+      }
+      return total > 0 && (bright / total) > 0.3 ? 1 : 0;
+    };
+
+    const panelBits = [];
+    for (let p = 0; p < panelCount; p++) {
+      const yOff = p * (VB_H + PANEL_GAP);
+      const grid = new CircuitGrid();
+
+      for (let r = 0; r < ROWS; r++) {
+        for (let c = 0; c < COLS - 1; c++) {
+          if (sample(svgToImgX(PAD + (c + 0.5) * CELL), svgToImgY(yOff + PAD + r * CELL)))
+            grid.setH(r, c, 1);
+        }
+      }
+
+      for (let r = 0; r < ROWS - 1; r++) {
+        for (let c = 0; c < COLS; c++) {
+          if (sample(svgToImgX(PAD + c * CELL), svgToImgY(yOff + PAD + (r + 0.5) * CELL)))
+            grid.setV(r, c, 1);
+        }
+      }
+
+      panelBits.push(grid.toBitArray());
+    }
+    return panelBits;
   }
 }
 
@@ -1829,23 +2063,122 @@ fileInput.addEventListener('change', () => {
 });
 
 function readFiles(files) {
-  const svgFiles = files.filter(f => f.name.endsWith('.svg')).slice(0, 3);
-  if (svgFiles.length === 0) return;
+  const statusEl = document.getElementById('decodeStatus');
+  const showStatus = (msg, isError = false) => {
+    statusEl.textContent = msg;
+    statusEl.style.color = isError ? '#cc6666' : '#7777aa';
+  };
 
-  const contents = [];
-  let loaded = 0;
-  svgFiles.forEach((file, i) => {
-    const reader = new FileReader();
-    reader.onload = () => {
-      contents[i] = reader.result;
-      loaded++;
-      if (loaded === svgFiles.length) {
-        svgInput.value = contents.join('\n\n');
-        btnDecode.click();
-      }
-    };
-    reader.readAsText(file);
-  });
+  if (files.length === 0) return;
+
+  const getType = (f) => {
+    const ext = f.name.toLowerCase().split('.').pop();
+    if (ext === 'svg') return 'svg';
+    if (ext === 'stl') return 'stl';
+    if (['png', 'jpg', 'jpeg', 'webp', 'bmp'].includes(ext)) return 'image';
+    return null;
+  };
+
+  const validFiles = files.filter(f => getType(f) !== null);
+  if (validFiles.length === 0) {
+    showStatus('No supported files (SVG, STL, or image)', true);
+    return;
+  }
+
+  const fileType = getType(validFiles[0]);
+  if (!validFiles.every(f => getType(f) === fileType)) {
+    showStatus('All files must be the same type (all SVG, all STL, or all images)', true);
+    return;
+  }
+
+  const targetFiles = validFiles.slice(0, 3);
+
+  if (fileType === 'svg') {
+    showStatus('Reading SVGs...');
+    const contents = [];
+    let loaded = 0;
+    targetFiles.forEach((file, i) => {
+      const reader = new FileReader();
+      reader.onload = () => {
+        contents[i] = reader.result;
+        loaded++;
+        if (loaded === targetFiles.length) {
+          svgInput.value = contents.join('\n\n');
+          showStatus('');
+          btnDecode.click();
+        }
+      };
+      reader.readAsText(file);
+    });
+  } else if (fileType === 'stl') {
+    if (targetFiles.length !== 3) {
+      showStatus(`Need 3 STL files (got ${targetFiles.length})`, true);
+      return;
+    }
+    showStatus('Parsing STL files...');
+    svgInput.value = '';
+    const buffers = [];
+    let loaded = 0;
+    targetFiles.forEach((file, i) => {
+      const reader = new FileReader();
+      reader.onload = () => {
+        buffers[i] = reader.result;
+        loaded++;
+        if (loaded === 3) {
+          try {
+            showStatus('Sampling grid from STL...');
+            const allBits = buffers.map(b => STLDecoder.extractGrids(b));
+            const result = PatternDecoder.decode3FromBits(allBits);
+            decodedOutput.classList.toggle('error', !result.valid);
+            decodedOutput.textContent = result.valid ? result.text
+              : `Error: ${result.error || 'Could not decode STL'}`;
+            showStatus(result.valid ? 'STL decoded successfully' : '', !result.valid);
+          } catch (e) {
+            decodedOutput.classList.add('error');
+            decodedOutput.textContent = `Error: ${e.message}`;
+            showStatus('STL decode failed', true);
+          }
+        }
+      };
+      reader.readAsArrayBuffer(file);
+    });
+  } else if (fileType === 'image') {
+    if (targetFiles.length !== 3) {
+      showStatus(`Need 3 images (got ${targetFiles.length})`, true);
+      return;
+    }
+    showStatus('Processing images...');
+    svgInput.value = '';
+    const images = [];
+    let loaded = 0;
+    targetFiles.forEach((file, i) => {
+      const reader = new FileReader();
+      reader.onload = () => {
+        const img = new Image();
+        img.onload = () => {
+          images[i] = img;
+          loaded++;
+          if (loaded === 3) {
+            try {
+              showStatus('Sampling grid from images...');
+              const allBits = images.map(im => PhotoDecoder.extractGrids(im));
+              const result = PatternDecoder.decode3FromBits(allBits);
+              decodedOutput.classList.toggle('error', !result.valid);
+              decodedOutput.textContent = result.valid ? result.text
+                : `Error: ${result.error || 'Could not decode image'}`;
+              showStatus(result.valid ? 'Image decoded successfully' : '', !result.valid);
+            } catch (e) {
+              decodedOutput.classList.add('error');
+              decodedOutput.textContent = `Error: ${e.message}`;
+              showStatus('Image decode failed', true);
+            }
+          }
+        };
+        img.src = reader.result;
+      };
+      reader.readAsDataURL(file);
+    });
+  }
 }
 
 // Live preview on typing (with debounce)
@@ -1974,6 +2307,8 @@ window.SVGRenderer = SVGRenderer;
 window.PatternDecoder = PatternDecoder;
 window.CircuitGrid = CircuitGrid;
 window.AestheticSolver = AestheticSolver;
+window.STLDecoder = STLDecoder;
+window.PhotoDecoder = PhotoDecoder;
 
 // Bridge for module script access
 window._getCurrentSvg = () => currentSvgs[selectedVariant];
