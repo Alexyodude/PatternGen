@@ -494,8 +494,7 @@ PatternDecoder &mdash; SVG &rarr; grid &rarr; text</pre>
     </div>
     <div class="btn-row">
       <button class="primary" id="btnEncode">Encode</button>
-      <button id="btnDownload" disabled>Download SVG</button>
-      <button id="btnDownloadAll" disabled>Download All (.zip)</button>
+      <button id="btnDownloadAll" disabled>Download SVG (.zip)</button>
       <button id="btnCopy" disabled>Copy SVG</button>
       <button id="btnShare" disabled>Share Link</button>
       <button id="btnDownloadSTL" disabled>Download All STL</button>
@@ -1833,7 +1832,6 @@ const charCount   = document.getElementById('charCount');
 const panelCountEl = document.getElementById('panelCount');
 const bitInfo     = document.getElementById('bitInfo');
 const btnEncode   = document.getElementById('btnEncode');
-const btnDownload = document.getElementById('btnDownload');
 const btnDownloadAll = document.getElementById('btnDownloadAll');
 const btnCopy     = document.getElementById('btnCopy');
 const previewArea = document.getElementById('previewArea');
@@ -1886,7 +1884,6 @@ btnEncode.addEventListener('click', () => {
   const text = inputText.value.trim();
   if (!text) {
     previewArea.innerHTML = '<span class="preview-placeholder">Enter some text first</span>';
-    btnDownload.disabled = true;
     btnDownloadAll.disabled = true;
     btnCopy.disabled = true;
     btnShare.disabled = true;
@@ -1920,7 +1917,6 @@ btnEncode.addEventListener('click', () => {
     previewArea.innerHTML = '';
     previewArea.appendChild(container);
 
-    btnDownload.disabled = false;
     btnDownloadAll.disabled = false;
     btnCopy.disabled = false;
     btnShare.disabled = false;
@@ -1942,21 +1938,6 @@ btnEncode.addEventListener('click', () => {
     previewArea.appendChild(errSpan);
     showToast('Encoding error');
   }
-});
-
-btnDownload.addEventListener('click', () => {
-  if (!currentSvgs.length) return;
-  // Download all 3 variants (all needed for decoding)
-  for (let v = 0; v < VARIANT_COUNT; v++) {
-    const blob = new Blob([currentSvgs[v]], { type: 'image/svg+xml' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `circuit-pattern-v${v + 1}.svg`;
-    a.click();
-    URL.revokeObjectURL(url);
-  }
-  showToast('All 3 variants downloaded');
 });
 
 btnDownloadAll.addEventListener('click', async () => {
