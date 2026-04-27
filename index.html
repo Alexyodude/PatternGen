@@ -412,11 +412,12 @@ ViewBox:        1840 &times; 507 px
 Stroke width:   61.745 px (round caps)</pre>
 
       <h3><span class="step-num">2</span>Character Encoding (6-bit)</h3>
-      <p>Each character is mapped to a 6-bit code supporting 44 characters:</p>
+      <p>Each character is mapped to a 6-bit code supporting 46 characters:</p>
       <pre>A-Z  &rarr;  0-25
 0-9  &rarr;  26-35
 SPACE &rarr; 36    .  &rarr; 37    ,  &rarr; 38    -  &rarr; 39
-!    &rarr;  40    ?  &rarr; 41    '  &rarr; 42    :  &rarr; 43</pre>
+!    &rarr;  40    ?  &rarr; 41    '  &rarr; 42    :  &rarr; 43
+(    &rarr;  44    )  &rarr; 45</pre>
 
       <h3><span class="step-num">3</span>Bit Stream Layout</h3>
       <p>Each panel (17&times;5 grid) carries <strong>148 data bits</strong> &mdash; 80 horizontal edge slots + 68 vertical edge slots. The bit stream is packed as:</p>
@@ -439,33 +440,28 @@ SPACE &rarr; 36    .  &rarr; 37    ,  &rarr; 38    -  &rarr; 39
       </ul>
       <p>Constraints prevent visual artifacts: no cycles (tracked via Union-Find), max 4 edges per node, and no tight triangles from straight-line diagonals.</p>
 
-      <h3><span class="step-num">6</span>3-Variant Security</h3>
-      <p>Each encoding produces <strong>3 distinct visual variants</strong>. Empty bit positions (data = 0) are filled with variant-dependent random noise using a 3-bit pattern scheme:</p>
+      <h3><span class="step-num">6</span>Variants &amp; Single-Glyph Decode</h3>
+      <p>Each encoding produces <strong>3 visual variants</strong>. The H/V data edges are identical across all variants — variants differ only in their decorative diagonal placements. As a result:</p>
       <ul>
-        <li>Data edges (bit = 1) appear in <strong>all 3 variants</strong></li>
-        <li>Noise edges appear in <strong>at most 2 of 3 variants</strong> (patterns 001&ndash;110, never 111)</li>
-        <li>Decoding: AND-intersect all 3 variants &rarr; only true data survives</li>
+        <li>H/V edges in any single SVG = exactly the encoded data bits</li>
+        <li>Decoding requires only <strong>one glyph</strong> &mdash; no intersection step</li>
+        <li>The 3 variants exist to give visual variety, not to gate decoding</li>
       </ul>
-      <p>This makes individual variants visually dense (~44% coverage matching references) while requiring all 3 SVGs to recover the text. A single variant cannot be decoded alone.</p>
 
       <h3><span class="step-num">7</span>SVG Rendering</h3>
       <p>Edges are chained into polylines (starting from degree-1 endpoints) and rendered as SVG <code>&lt;path&gt;</code> elements. Horizontal edges become <code>H</code> commands, vertical become <code>V</code>, diagonals become <code>L</code>, and arcs use cubic bezier <code>C</code> curves with the standard quarter-circle factor K = 0.5523.</p>
 
       <h3><span class="step-num">8</span>Decoding</h3>
-      <p>To decode, all 3 variant SVGs are required. The decoder:</p>
+      <p>The decoder reads <strong>one SVG</strong> and:</p>
       <ul>
-        <li>Parses each SVG's <code>&lt;path&gt;</code> elements</li>
+        <li>Parses each <code>&lt;path&gt;</code> element</li>
         <li>Snaps coordinates to the nearest grid node</li>
-        <li>Extracts H/V edges (ignores diagonals and arcs)</li>
-        <li>AND-intersects the 3 grids to recover data bits</li>
+        <li>Extracts H/V edges (ignores diagonals and standalone arcs)</li>
         <li>Reverses the stride permutation</li>
         <li>Reads the header, character codes, and verifies the checksum</li>
       </ul>
 
       <hr>
-
-      <h3>Adaptive Fill</h3>
-      <p>Random noise fill is <strong>quadrant-balanced</strong> (4 columns &times; 2 rows = 8 zones). Sparse zones receive more fill to maintain even visual density. A target of ~58 total visual edges per panel ensures short inputs (like "A") still produce dense patterns.</p>
 
       <h3>Determinism</h3>
       <p>All random decisions use a deterministic hash function seeded with grid position, character data, and variant index. Same input always produces the exact same 3 patterns.</p>
@@ -485,7 +481,7 @@ PatternDecoder &mdash; SVG &rarr; grid &rarr; text</pre>
   <!-- Encode Section -->
   <div class="panel">
     <div class="panel-label">Encode Text</div>
-    <textarea id="inputText" placeholder="Type text to encode (A-Z, 0-9, space, . , - ! ? ' :)" spellcheck="false"></textarea>
+    <textarea id="inputText" placeholder="Type text to encode (A-Z, 0-9, space, . , - ! ? ' : ( ))" spellcheck="false"></textarea>
     <div class="info-row">
       <span id="charCount">0 / 23 characters</span>
       <span id="panelCount">1 panel</span>
@@ -545,17 +541,17 @@ PatternDecoder &mdash; SVG &rarr; grid &rarr; text</pre>
 
   <!-- Decode Section -->
   <div class="panel">
-    <div class="panel-label">Decode Pattern (drop or select 3 variant files: SVG, STL, or images)</div>
+    <div class="panel-label">Decode Pattern (drop or select an SVG, STL, or image file)</div>
     <div class="decode-area">
-      <textarea id="svgInput" placeholder="Paste all 3 SVG variants here (separated by blank lines) to decode..."></textarea>
+      <textarea id="svgInput" placeholder="Paste an SVG here to decode..."></textarea>
       <div class="drop-zone" id="dropZone">
-        <span>Drop 3 files</span>
+        <span>Drop a file</span>
         <span>SVG, STL, or Image</span>
         <input type="file" id="fileInput" accept=".svg,.stl,.png,.jpg,.jpeg,.webp,.bmp" multiple>
       </div>
     </div>
     <div class="btn-row">
-      <button id="btnDecode">Decode (3 variants)</button>
+      <button id="btnDecode">Decode</button>
     </div>
     <div id="decodeStatus" style="font-size: 0.78rem; color: #7777aa; margin-top: 0.4rem; min-height: 1.2em;"></div>
     <div class="decoded-output" id="decodedOutput"></div>
@@ -596,7 +592,7 @@ const HEADER_BITS     = HEADER_LEN_BITS + HEADER_CHK_BITS; // 8
 const CHAR_BITS       = 6;
 const MAX_CHARS       = Math.floor((TOTAL_BITS - HEADER_BITS) / CHAR_BITS); // 23
 
-const CHARSET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 .,-!?\':';
+const CHARSET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 .,-!?\':()';
 
 function nodeX(c) { return PAD + c * CELL; }
 function nodeY(r) { return PAD + r * CELL; }
@@ -797,161 +793,10 @@ class TextEncoder_ {
       // 1) Load data-only edges
       grid.fromBitArray(dataBits);
 
-      // 2) Add aesthetic arcs/diags at data-edge corners
+      // 2) Add aesthetic arcs/diags at data-edge corners.
+      //    Aesthetics modify only diagonals + smoothCorners markers — H/V edges
+      //    remain exactly the data bits, so a single glyph decodes correctly.
       AestheticSolver.fillDiagonals(grid, variant, dataSeed);
-
-      // 3) Adaptive random H/V fill — balanced per 2D quadrant (4 cols × 2 rows).
-      //    Uses grid position (r,c) + dataSeed for hash, NOT bit index.
-      //    Sparser quadrants get more fill to even out spatial density.
-      //    Pattern selection is variant-independent (never 111 = all-on).
-      //    Decoding: AND all 3 variants → only data bits survive.
-      const QC = 4, QR = 2, NQ = QC * QR;
-      const midRow = Math.floor(ROWS / 2); // row 2 splits top/bottom
-      const getQuadrant = (r, c, maxC) => {
-        const qi = Math.min(Math.floor(c / (maxC + 1) * QC), QC - 1);
-        const qj = r < midRow ? 0 : 1;
-        return qj * QC + qi;
-      };
-
-      const map = CircuitGrid._buildBitMap();
-      const currentBits = grid.toBitArray();
-
-      // Count existing edges per quadrant
-      const qExisting = new Array(NQ).fill(0);
-      for (let i = 0; i < TOTAL_BITS; i++) {
-        if (!currentBits[i]) continue;
-        const e = map[i];
-        const maxC = e.type === 'H' ? COLS - 2 : COLS - 1;
-        qExisting[getQuadrant(e.r, e.c, maxC)]++;
-      }
-
-      // Collect empty slots grouped by quadrant
-      const qEmpty = Array.from({length: NQ}, () => []);
-      for (let r = 0; r < ROWS; r++)
-        for (let c = 0; c < COLS - 1; c++) {
-          if (grid.getH(r, c)) continue;
-          const qi = getQuadrant(r, c, COLS - 2);
-          const h = AestheticSolver.hash(r, c, dataSeed + 99, 0);
-          qEmpty[qi].push({ type: 'H', r, c, hash: h, pattern: (h % 6) + 1 });
-        }
-      for (let r = 0; r < ROWS - 1; r++)
-        for (let c = 0; c < COLS; c++) {
-          if (grid.getV(r, c)) continue;
-          const qi = getQuadrant(r, c, COLS - 1);
-          const h = AestheticSolver.hash(r, c, dataSeed + 199, 0);
-          qEmpty[qi].push({ type: 'V', r, c, hash: h, pattern: (h % 6) + 1 });
-        }
-
-      // Target: fill grid to ~55 visual edges total (H/V + diagonals → ~44% pixel coverage).
-      // Count diagonals too since they contribute to visual density.
-      // Each selected slot has ~50% chance of fillBit=1 per variant, so we
-      // select ~2× the needed count to compensate.
-      const totalHV = qExisting.reduce((a, b) => a + b, 0);
-      const totalVisual = totalHV + grid.dEdges.length + grid.smoothCorners.size;
-      const TARGET_VISUAL = 58;
-      const totalNeeded = Math.max(0, TARGET_VISUAL - totalVisual);
-      const selectNeeded = totalNeeded * 2; // ~50% fill rate per variant
-      const basePerQ = selectNeeded / NQ;
-      const avgExisting = totalHV / NQ;
-      // Build set of H/V edges blocked from random fill.
-      const arcBlockedHV = new Set();
-
-      // 1) Smooth corners: block opposite-side edges that cross the curve's belly
-      //    AND block all non-L-corner edges at the bend node to keep its degree = 2.
-      //    The renderer only smooths corners at degree-2 chain nodes.
-      for (const [bendKey, arc] of grid.smoothCorners) {
-        const [br, bc] = bendKey.split(',').map(Number);
-        const {r1, c1, r2, c2} = arc;
-        // Block opposite-side edges (cross the curve belly)
-        const hc = Math.min(c1, c2);
-        if (hc >= 0 && hc < COLS - 1) arcBlockedHV.add(`H:${r2},${hc}`);
-        const vr = Math.min(r1, r2);
-        if (vr >= 0 && vr < ROWS - 1) arcBlockedHV.add(`V:${vr},${c1}`);
-        // Block all H/V edges at bend node except the two L-corner edges.
-        // This prevents random fill from increasing the bend's degree beyond 2.
-        const lcH = `H:${br},${Math.min(bc, c1 === bc ? c1 : (c2 === bc ? c2 : bc))}`;
-        const lcV = `V:${Math.min(br, r1 === br ? r1 : (r2 === br ? r2 : br))},${bc}`;
-        // Compute which H and V are the L-corner edges
-        const lcHkey = (r1 === br) ? `H:${br},${Math.min(bc, c1)}` : `H:${br},${Math.min(bc, c2)}`;
-        const lcVkey = (c1 === bc) ? `V:${Math.min(br, r1)},${bc}` : `V:${Math.min(br, r2)},${bc}`;
-        // Block all 4 possible edges at bend, except the 2 L-corner edges
-        if (bc > 0) { const k = `H:${br},${bc-1}`; if (k !== lcHkey) arcBlockedHV.add(k); }
-        if (bc < COLS-1) { const k = `H:${br},${bc}`; if (k !== lcHkey) arcBlockedHV.add(k); }
-        if (br > 0) { const k = `V:${br-1},${bc}`; if (k !== lcVkey) arcBlockedHV.add(k); }
-        if (br < ROWS-1) { const k = `V:${br},${bc}`; if (k !== lcVkey) arcBlockedHV.add(k); }
-      }
-
-      // 2) Block opposite-side edges for fill diagonal arcs
-      for (const d of grid.dEdges) {
-        if (d.type !== 'arc') continue;
-        const {r1, c1, r2, c2} = d;
-        const hc = Math.min(c1, c2);
-        if (hc >= 0 && hc < COLS - 1) arcBlockedHV.add(`H:${r2},${hc}`);
-        const vr = Math.min(r1, r2);
-        if (vr >= 0 && vr < ROWS - 1) arcBlockedHV.add(`V:${vr},${c1}`);
-      }
-
-      // Check if adding an H/V edge would complete a triangle with an existing diagonal
-      const hvWouldTriangle = (type, r, c) => {
-        // An H edge connects (r,c)-(r,c+1); a V edge connects (r,c)-(r+1,c)
-        // Check all diagonals touching these two nodes
-        for (const d of grid.dEdges) {
-          const dr1 = d.r1, dc1 = d.c1, dr2 = d.r2, dc2 = d.c2;
-          if (type === 'H') {
-            // H edge: (r,c)-(r,c+1). Triangle if diagonal has one end at
-            // a node that's H/V-connected to both (r,c) and (r,c+1)
-            // The diagonal endpoints + this H edge form a triangle if:
-            // one diagonal endpoint == (r,c) and the other is V-adjacent to (r,c+1), or
-            // one diagonal endpoint == (r,c+1) and the other is V-adjacent to (r,c), etc.
-            const nodes = [[r, c], [r, c + 1]];
-            for (const [nr, nc] of nodes) {
-              // Is this node a diagonal endpoint?
-              let otherR, otherC;
-              if (dr1 === nr && dc1 === nc) { otherR = dr2; otherC = dc2; }
-              else if (dr2 === nr && dc2 === nc) { otherR = dr1; otherC = dc1; }
-              else continue;
-              // Is the other diagonal endpoint H/V-connected to the other H-edge node?
-              const [ar, ac] = nr === r && nc === c ? [r, c + 1] : [r, c];
-              const connected =
-                (otherR === ar && Math.abs(otherC - ac) === 1 && grid.getH(ar, Math.min(otherC, ac))) ||
-                (otherC === ac && Math.abs(otherR - ar) === 1 && grid.getV(Math.min(otherR, ar), ac));
-              if (connected) return true;
-            }
-          } else {
-            // V edge: (r,c)-(r+1,c)
-            const nodes = [[r, c], [r + 1, c]];
-            for (const [nr, nc] of nodes) {
-              let otherR, otherC;
-              if (dr1 === nr && dc1 === nc) { otherR = dr2; otherC = dc2; }
-              else if (dr2 === nr && dc2 === nc) { otherR = dr1; otherC = dc1; }
-              else continue;
-              const [ar, ac] = nr === r && nc === c ? [r + 1, c] : [r, c];
-              const connected =
-                (otherR === ar && Math.abs(otherC - ac) === 1 && grid.getH(ar, Math.min(otherC, ac))) ||
-                (otherC === ac && Math.abs(otherR - ar) === 1 && grid.getV(Math.min(otherR, ar), ac));
-              if (connected) return true;
-            }
-          }
-        }
-        return false;
-      };
-
-      for (let qi = 0; qi < NQ; qi++) {
-        const deficit = Math.max(0, avgExisting - qExisting[qi]);
-        const target = Math.round(basePerQ + deficit * 2);
-        qEmpty[qi].sort((a, b) => a.hash - b.hash);
-        let selected = 0;
-        for (const slot of qEmpty[qi]) {
-          if (selected >= target) break;
-          selected++;
-          const fillBit = (slot.pattern >> (2 - variant)) & 1;
-          if (!fillBit) continue;
-          if (hvWouldTriangle(slot.type, slot.r, slot.c)) continue;
-          if (arcBlockedHV.has(`${slot.type}:${slot.r},${slot.c}`)) continue;
-          if (slot.type === 'H') grid.setH(slot.r, slot.c, 1);
-          else grid.setV(slot.r, slot.c, 1);
-        }
-      }
 
       return grid;
     });
@@ -1902,8 +1747,9 @@ btnEncode.addEventListener('click', () => {
       currentSvgs.push(SVGRenderer.render(grids));
     }
 
-    // Verify decoding by AND-intersecting all 3 variants
-    const decoded = PatternDecoder.decode3(currentSvgs);
+    // Verify single-glyph decode against the first variant — random fill is gone,
+    // so any single SVG decodes the full text on its own.
+    const decoded = PatternDecoder.decode(currentSvgs[0]);
     const isValid = decoded.valid && decoded.text === text.toUpperCase();
 
     // Build the 3-variant display
@@ -1927,9 +1773,9 @@ btnEncode.addEventListener('click', () => {
     btnOutlineSVG.disabled = false;
 
     if (isValid) {
-      showToast('3 variants encoded — decodes correctly via intersection');
+      showToast('Encoded — single glyph decodes correctly');
     } else {
-      showToast('Warning: 3-variant decode verification failed');
+      showToast('Warning: single-glyph decode verification failed');
       console.warn('Decode mismatch:', decoded);
     }
   } catch (e) {
@@ -2034,13 +1880,11 @@ btnDecode.addEventListener('click', () => {
 
   const svgs = splitSvgs(raw);
   let result;
-  if (svgs.length >= 3) {
-    result = PatternDecoder.decode3(svgs.slice(0, 3));
-  } else if (svgs.length === 1) {
-    // Legacy single-SVG decode (works only without random fill)
+  if (svgs.length >= 1) {
+    // Single-SVG decode — H/V edges are pure data, so one glyph is sufficient.
     result = PatternDecoder.decode(svgs[0]);
   } else {
-    result = { valid: false, error: `Need 3 SVG variants (found ${svgs.length})` };
+    result = { valid: false, error: `No SVG found in input` };
   }
 
   decodedOutput.classList.toggle('error', !result.valid);
@@ -2093,91 +1937,69 @@ function readFiles(files) {
 
   const targetFiles = validFiles.slice(0, 3);
 
+  // Decode the first file of whatever type was dropped — one glyph is enough.
+  const file = targetFiles[0];
   if (fileType === 'svg') {
-    showStatus('Reading SVGs...');
-    const contents = [];
-    let loaded = 0;
-    targetFiles.forEach((file, i) => {
-      const reader = new FileReader();
-      reader.onload = () => {
-        contents[i] = reader.result;
-        loaded++;
-        if (loaded === targetFiles.length) {
-          svgInput.value = contents.join('\n\n');
-          showStatus('');
-          btnDecode.click();
-        }
-      };
-      reader.readAsText(file);
-    });
+    showStatus('Reading SVG...');
+    const reader = new FileReader();
+    reader.onload = () => {
+      svgInput.value = reader.result;
+      showStatus('');
+      btnDecode.click();
+    };
+    reader.readAsText(file);
   } else if (fileType === 'stl') {
-    if (targetFiles.length !== 3) {
-      showStatus(`Need 3 STL files (got ${targetFiles.length})`, true);
-      return;
-    }
-    showStatus('Parsing STL files...');
+    showStatus('Parsing STL...');
     svgInput.value = '';
-    const buffers = [];
-    let loaded = 0;
-    targetFiles.forEach((file, i) => {
-      const reader = new FileReader();
-      reader.onload = () => {
-        buffers[i] = reader.result;
-        loaded++;
-        if (loaded === 3) {
-          try {
-            showStatus('Sampling grid from STL...');
-            const allBits = buffers.map(b => STLDecoder.extractGrids(b));
-            const result = PatternDecoder.decode3FromBits(allBits);
-            decodedOutput.classList.toggle('error', !result.valid);
-            decodedOutput.textContent = result.valid ? result.text
-              : `Error: ${result.error || 'Could not decode STL'}`;
-            showStatus(result.valid ? 'STL decoded successfully' : '', !result.valid);
-          } catch (e) {
-            decodedOutput.classList.add('error');
-            decodedOutput.textContent = `Error: ${e.message}`;
-            showStatus('STL decode failed', true);
-          }
+    const reader = new FileReader();
+    reader.onload = () => {
+      try {
+        showStatus('Sampling grid from STL...');
+        const panelBits = STLDecoder.extractGrids(reader.result);
+        if (!panelBits) throw new Error('Failed to parse STL');
+        const results = panelBits.map(bits => PatternDecoder._decodeBits(bits));
+        const allValid = results.every(r => r.valid);
+        const fullText = results.map(r => r.text).join('');
+        const firstError = results.find(r => !r.valid);
+        decodedOutput.classList.toggle('error', !allValid);
+        decodedOutput.textContent = allValid ? fullText
+          : `Error: ${firstError?.error || 'Could not decode STL'}`;
+        showStatus(allValid ? 'STL decoded successfully' : '', !allValid);
+      } catch (e) {
+        decodedOutput.classList.add('error');
+        decodedOutput.textContent = `Error: ${e.message}`;
+        showStatus('STL decode failed', true);
+      }
+    };
+    reader.readAsArrayBuffer(file);
+  } else if (fileType === 'image') {
+    showStatus('Processing image...');
+    svgInput.value = '';
+    const reader = new FileReader();
+    reader.onload = () => {
+      const img = new Image();
+      img.onload = () => {
+        try {
+          showStatus('Sampling grid from image...');
+          const panelBits = PhotoDecoder.extractGrids(img);
+          if (!panelBits) throw new Error('Failed to detect pattern in image');
+          const results = panelBits.map(bits => PatternDecoder._decodeBits(bits));
+          const allValid = results.every(r => r.valid);
+          const fullText = results.map(r => r.text).join('');
+          const firstError = results.find(r => !r.valid);
+          decodedOutput.classList.toggle('error', !allValid);
+          decodedOutput.textContent = allValid ? fullText
+            : `Error: ${firstError?.error || 'Could not decode image'}`;
+          showStatus(allValid ? 'Image decoded successfully' : '', !allValid);
+        } catch (e) {
+          decodedOutput.classList.add('error');
+          decodedOutput.textContent = `Error: ${e.message}`;
+          showStatus('Image decode failed', true);
         }
       };
-      reader.readAsArrayBuffer(file);
-    });
-  } else if (fileType === 'image') {
-    if (targetFiles.length !== 3) {
-      showStatus(`Need 3 images (got ${targetFiles.length})`, true);
-      return;
-    }
-    showStatus('Processing images...');
-    svgInput.value = '';
-    const images = [];
-    let loaded = 0;
-    targetFiles.forEach((file, i) => {
-      const reader = new FileReader();
-      reader.onload = () => {
-        const img = new Image();
-        img.onload = () => {
-          images[i] = img;
-          loaded++;
-          if (loaded === 3) {
-            try {
-              showStatus('Sampling grid from images...');
-              const allBits = images.map(im => PhotoDecoder.extractGrids(im));
-              const result = PatternDecoder.decode3FromBits(allBits);
-              decodedOutput.classList.toggle('error', !result.valid);
-              decodedOutput.textContent = result.valid ? result.text
-                : `Error: ${result.error || 'Could not decode image'}`;
-              showStatus(result.valid ? 'Image decoded successfully' : '', !result.valid);
-            } catch (e) {
-              decodedOutput.classList.add('error');
-              decodedOutput.textContent = `Error: ${e.message}`;
-              showStatus('Image decode failed', true);
-            }
-          }
-        };
-        img.src = reader.result;
-      };
-      reader.readAsDataURL(file);
-    });
+      img.src = reader.result;
+    };
+    reader.readAsDataURL(file);
   }
 }
 
@@ -2206,27 +2028,23 @@ inputText.addEventListener('input', () => {
     { input: 'TEST!', desc: 'with punctuation' },
     { input: 'THE QUICK BROWN FOX JUM', desc: 'max single panel (23 chars)' },
     { input: 'THE QUICK BROWN FOX JUMPS OVER THE LAZY DOG 12345', desc: 'multi-panel (50 chars)' },
-    { input: 'A.B,C-D!E?F\'G:H', desc: 'all special characters' },
+    { input: 'A.B,C-D!E?F\'G:H()', desc: 'all special characters' },
+    { input: 'CALL(X) AND (Y).', desc: 'parentheses' },
   ];
 
   let pass = 0, fail = 0;
   for (const t of allTests) {
     try {
-      // Generate all 3 variants
-      const svgs = [];
-      let panelInfo = '';
-      for (let v = 0; v < VARIANT_COUNT; v++) {
-        const grids = TextEncoder_.encode(t.input, v);
-        svgs.push(SVGRenderer.render(grids));
-        if (v === 0) panelInfo = `${grids.length} panel${grids.length>1?'s':''}`;
-      }
+      // Generate variant 0 and decode it on its own — single glyph is enough.
+      const grids = TextEncoder_.encode(t.input, 0);
+      const svg = SVGRenderer.render(grids);
+      const panelInfo = `${grids.length} panel${grids.length>1?'s':''}`;
 
-      // Decode via 3-variant AND intersection
-      const result = PatternDecoder.decode3(svgs);
+      const result = PatternDecoder.decode(svg);
       const expected = t.input.toUpperCase();
       if (result.valid && result.text === expected) {
         pass++;
-        log(`PASS  "${t.input}" (${t.desc}) [${panelInfo}, 3-variant decode]`, true);
+        log(`PASS  "${t.input}" (${t.desc}) [${panelInfo}, single-glyph decode]`, true);
       } else {
         fail++;
         log(`FAIL  "${t.input}" -> "${result.text}" err=${result.error||'none'} (${t.desc})`, false);
@@ -2253,39 +2071,26 @@ inputText.addEventListener('input', () => {
     log(`ERROR determinism: ${e.message}`, false);
   }
 
-  // Variant diversity test: 3 variants produce different SVGs
+  // Every variant individually decodes to the same text (diagonals/aesthetics
+  // differ across variants but H/V data is identical, so each glyph is decodable).
   try {
-    const svgs = [];
-    for (let v = 0; v < VARIANT_COUNT; v++)
-      svgs.push(SVGRenderer.render(TextEncoder_.encode('HELLO WORLD', v)));
-    const unique = new Set(svgs).size;
-    if (unique === VARIANT_COUNT) {
+    const expected = 'HELLO WORLD';
+    let allOk = true;
+    for (let v = 0; v < VARIANT_COUNT; v++) {
+      const svg = SVGRenderer.render(TextEncoder_.encode(expected, v));
+      const r = PatternDecoder.decode(svg);
+      if (!r.valid || r.text !== expected) { allOk = false; break; }
+    }
+    if (allOk) {
       pass++;
-      log(`PASS  variants: ${VARIANT_COUNT} distinct SVGs for same input`, true);
+      log(`PASS  every variant decodes individually to "${expected}"`, true);
     } else {
       fail++;
-      log(`FAIL  variants: only ${unique}/${VARIANT_COUNT} unique SVGs`, false);
+      log('FAIL  at least one variant did not decode on its own', false);
     }
   } catch (e) {
     fail++;
-    log(`ERROR variants: ${e.message}`, false);
-  }
-
-  // Single-variant decode should FAIL (random fill makes individual SVGs undecodable)
-  try {
-    const svg0 = SVGRenderer.render(TextEncoder_.encode('HELLO WORLD', 0));
-    const single = PatternDecoder.decode(svg0);
-    if (!single.valid || single.text !== 'HELLO WORLD') {
-      pass++;
-      log('PASS  single-variant decode correctly fails (needs all 3)', true);
-    } else {
-      // It might still pass by coincidence if random fill doesn't corrupt data bits
-      pass++;
-      log('PASS  single-variant decode (no random fill collision)', true);
-    }
-  } catch (e) {
-    fail++;
-    log(`ERROR single-variant: ${e.message}`, false);
+    log(`ERROR per-variant decode: ${e.message}`, false);
   }
 
   const total = pass + fail;
