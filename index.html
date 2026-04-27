@@ -2345,8 +2345,7 @@ const SW_SVG = 61.745;      // SVG stroke width units
 const SCALE = STROKE_WIDTH / SW_SVG;  // SVG units → mm
 const RADIUS = STROKE_WIDTH / 2;      // mm, half stroke for round caps
 const EXTRUDE = 3;           // mm extrusion depth (Z)
-const CYL_SEGS = 16;
-const BEZIER_SAMPLES = 16;
+const BEZIER_SAMPLES = 32;
 
 // Parse SVG path data into polylines of {x, y} points
 function parseSvgPathsToPolylines(svgString) {
@@ -2463,125 +2462,6 @@ function parseSvgPathsToPolylines(svgString) {
   return polylines;
 }
 
-// Build 3D geometry from polylines.
-// Merges all geometry into a single BufferGeometry for clean STL export.
-function buildModel(polylines, scale, radius, extrude) {
-  const material = new THREE.MeshStandardMaterial({
-    color: 0xffffff, roughness: 0.4, metalness: 0.1, side: THREE.DoubleSide
-  });
-
-  const vertexSet = new Set();
-  const halfE = extrude / 2;
-  const geometries = [];
-
-  const pos = new THREE.Vector3();
-  const quat = new THREE.Quaternion();
-  const scl = new THREE.Vector3(1, 1, 1);
-  const mat = new THREE.Matrix4();
-  const euler = new THREE.Euler();
-
-  for (const poly of polylines) {
-    for (let i = 0; i < poly.length - 1; i++) {
-      const p1 = poly[i];
-      const p2 = poly[i + 1];
-
-      const x1 = p1.x * scale, y1 = -p1.y * scale;
-      const x2 = p2.x * scale, y2 = -p2.y * scale;
-
-      const dx = x2 - x1, dy = y2 - y1;
-      const len = Math.sqrt(dx * dx + dy * dy);
-      if (len < 0.001) continue;
-
-      // Box for segment
-      const box = new THREE.BoxGeometry(len, radius * 2, extrude);
-      const angle = Math.atan2(dy, dx);
-      pos.set((x1 + x2) / 2, (y1 + y2) / 2, halfE);
-      euler.set(0, 0, angle);
-      quat.setFromEuler(euler);
-      mat.compose(pos, quat, scl);
-      box.applyMatrix4(mat);
-      box.computeVertexNormals();
-      geometries.push(box);
-
-      // Cylinder caps at vertices
-      const key1 = `${x1.toFixed(3)},${y1.toFixed(3)}`;
-      const key2 = `${x2.toFixed(3)},${y2.toFixed(3)}`;
-
-      for (const [key, vx, vy] of [[key1, x1, y1], [key2, x2, y2]]) {
-        if (!vertexSet.has(key)) {
-          vertexSet.add(key);
-          const cyl = new THREE.CylinderGeometry(radius, radius, extrude, CYL_SEGS);
-          pos.set(vx, vy, halfE);
-          euler.set(Math.PI / 2, 0, 0);
-          quat.setFromEuler(euler);
-          mat.compose(pos, quat, scl);
-          cyl.applyMatrix4(mat);
-          cyl.computeVertexNormals();
-          geometries.push(cyl);
-        }
-      }
-    }
-  }
-
-  // Merge all geometries into one for clean STL export
-  const merged = mergeGeometries(geometries);
-  merged.computeVertexNormals();
-  const mesh = new THREE.Mesh(merged, material);
-
-  // Dispose individual geometries
-  for (const g of geometries) g.dispose();
-
-  const group = new THREE.Group();
-  group.add(mesh);
-  return group;
-}
-
-// Merge array of BufferGeometry into one
-function mergeGeometries(geometries) {
-  let totalVerts = 0, totalIdx = 0;
-  for (const g of geometries) {
-    totalVerts += g.attributes.position.count;
-    totalIdx += g.index ? g.index.count : g.attributes.position.count;
-  }
-
-  const positions = new Float32Array(totalVerts * 3);
-  const normals = new Float32Array(totalVerts * 3);
-  const indices = new Uint32Array(totalIdx);
-
-  let vertOff = 0, idxOff = 0, vertCount = 0;
-  for (const g of geometries) {
-    const pos = g.attributes.position;
-    const nrm = g.attributes.normal;
-    const idx = g.index;
-
-    for (let i = 0; i < pos.count * 3; i++) {
-      positions[vertOff + i] = pos.array[i];
-      if (nrm) normals[vertOff + i] = nrm.array[i];
-    }
-
-    if (idx) {
-      for (let i = 0; i < idx.count; i++) {
-        indices[idxOff + i] = idx.array[i] + vertCount;
-      }
-      idxOff += idx.count;
-    } else {
-      for (let i = 0; i < pos.count; i++) {
-        indices[idxOff + i] = vertCount + i;
-      }
-      idxOff += pos.count;
-    }
-
-    vertOff += pos.count * 3;
-    vertCount += pos.count;
-  }
-
-  const merged = new THREE.BufferGeometry();
-  merged.setAttribute('position', new THREE.BufferAttribute(positions, 3));
-  merged.setAttribute('normal', new THREE.BufferAttribute(normals, 3));
-  merged.setIndex(new THREE.BufferAttribute(indices, 1));
-  return merged;
-}
-
 // Scene setup
 function initScene(canvas, container) {
   const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
@@ -2686,7 +2566,15 @@ function render3DPreviews() {
     for (let v = 0; v < 3; v++) {
       try {
         const polylines = parseSvgPathsToPolylines(allSvgs[v]);
-        const group = buildModel(polylines, SCALE, RADIUS, EXTRUDE);
+        // Use the same solid pipeline as the STL export so the preview's
+        // shading matches what gets printed (one merged solid, smooth normals).
+        const solidGeo = buildSolidGeometry(polylines, SCALE, RADIUS, EXTRUDE);
+        const material = new THREE.MeshStandardMaterial({
+          color: 0xffffff, roughness: 0.4, metalness: 0.1, side: THREE.DoubleSide
+        });
+        const mesh = new THREE.Mesh(solidGeo, material);
+        const group = new THREE.Group();
+        group.add(mesh);
 
         const { renderer, scene, camera, controls } = initScene(canvases[v], slots[v]);
         scene.add(group);
@@ -2751,7 +2639,7 @@ function polylinesToSolidOutline(polylines, scale, radius) {
     co.AddPath(path, ClipperLib.JoinType.jtRound, ClipperLib.EndType.etOpenRound);
   }
 
-  co.ArcTolerance = CLIPPER_SCALE * 0.015; // ~0.015mm → ~54 segs / circle (smooth, low-poly)
+  co.ArcTolerance = CLIPPER_SCALE * 0.003; // ~0.003mm → ~50 segs/quarter on the cap (smooth)
   co.Execute(solution, radius * CLIPPER_SCALE);
 
   // Clean up with Clipper union to merge overlapping polygons
@@ -2761,9 +2649,9 @@ function polylinesToSolidOutline(polylines, scale, radius) {
   clipper.Execute(ClipperLib.ClipType.ctUnion, merged,
     ClipperLib.PolyFillType.pftNonZero, ClipperLib.PolyFillType.pftNonZero);
 
-  // Drop near-collinear and near-coincident vertices to cut face count.
-  // Distance is in Clipper integer units; ~0.02mm tolerance for visible smoothness.
-  ClipperLib.Clipper.CleanPolygons(merged, CLIPPER_SCALE * 0.02);
+  // NB: do NOT call CleanPolygons here — its near-collinear test (≤distance
+  // perpendicular to a neighbor chord) silently deletes alternating samples
+  // on the round caps and bezier offsets, producing visibly flat facets.
 
   // Convert back to float mm coordinates
   return merged.map(ring => ring.map(pt => ({
