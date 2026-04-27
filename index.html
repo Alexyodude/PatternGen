@@ -2823,8 +2823,14 @@ function ringsToSvgPath(rings) {
 
 function buildOutlineSvg(svgString, scale, radius) {
   const polylines = parseSvgPathsToPolylines(svgString);
-  const rings = polylinesToSolidOutline(polylines, scale, radius);
-  if (!rings.length) return null;
+  const flippedRings = polylinesToSolidOutline(polylines, scale, radius);
+  if (!flippedRings.length) return null;
+
+  // polylinesToSolidOutline flips Y for the STL pipeline (Y-up in 3D space).
+  // For an Outline SVG that should visually match the encoded pattern,
+  // un-flip Y so the SVG renders right-side-up. This also restores the
+  // original CCW/CW winding convention (still opposite, so nonzero fill works).
+  const rings = flippedRings.map(ring => ring.map(p => ({ x: p.x, y: -p.y })));
 
   // Compute bounding box
   let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
