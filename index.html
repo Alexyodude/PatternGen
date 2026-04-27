@@ -1198,25 +1198,32 @@ class AestheticSolver {
 
 // ─── SVGRenderer ─────────────────────────────────────────────────────
 class SVGRenderer {
-  static render(grids) {
+  static render(grids, opts = {}) {
+    const horizontal = !!opts.horizontal;
     const panelCount = grids.length;
-    const totalHeight = panelCount * VB_H + (panelCount - 1) * PANEL_GAP;
+    const totalWidth = horizontal
+      ? panelCount * VB_W + (panelCount - 1) * PANEL_GAP
+      : VB_W;
+    const totalHeight = horizontal
+      ? VB_H
+      : panelCount * VB_H + (panelCount - 1) * PANEL_GAP;
     const paths = [];
 
     for (let p = 0; p < panelCount; p++) {
-      const yOff = p * (VB_H + PANEL_GAP);
-      const gridPaths = SVGRenderer.renderGrid(grids[p], yOff);
+      const xOff = horizontal ? p * (VB_W + PANEL_GAP) : 0;
+      const yOff = horizontal ? 0 : p * (VB_H + PANEL_GAP);
+      const gridPaths = SVGRenderer.renderGrid(grids[p], xOff, yOff);
       paths.push(...gridPaths);
     }
 
     return [
-      `<svg width="${VB_W}" height="${totalHeight}" viewBox="0 0 ${VB_W} ${totalHeight}" fill="none" xmlns="http://www.w3.org/2000/svg">`,
+      `<svg width="${totalWidth}" height="${totalHeight}" viewBox="0 0 ${totalWidth} ${totalHeight}" fill="none" xmlns="http://www.w3.org/2000/svg">`,
       ...paths.map(d => `<path d="${d}" stroke="white" stroke-width="${SW}" stroke-linecap="round" stroke-linejoin="round"/>`),
       `</svg>`
     ].join('\n');
   }
 
-  static renderGrid(grid, yOff) {
+  static renderGrid(grid, xOff, yOff) {
     const adj = grid.getAdjacency();
     const visitedEdges = new Set();
     const edgeKey = (r1, c1, r2, c2) => {
@@ -1233,8 +1240,8 @@ class SVGRenderer {
       if (e.type !== 'arc') continue;
       const ek = edgeKey(e.r1, e.c1, e.r2, e.c2);
       arcEdgeKeys.add(ek);
-      const sx = nodeX(e.c1), sy = nodeY(e.r1) + yOff;
-      const ex = nodeX(e.c2), ey = nodeY(e.r2) + yOff;
+      const sx = nodeX(e.c1) + xOff, sy = nodeY(e.r1) + yOff;
+      const ex = nodeX(e.c2) + xOff, ey = nodeY(e.r2) + yOff;
       const dx = ex - sx, dy = ey - sy;
       allPaths.push(`M${fmt(sx)} ${fmt(sy)}C${fmt(sx + dx * K)} ${fmt(sy)} ${fmt(ex)} ${fmt(ey - dy * K)} ${fmt(ex)} ${fmt(ey)}`);
     }
@@ -1288,7 +1295,7 @@ class SVGRenderer {
         }
 
         if (chain.length >= 2) {
-          allPaths.push(SVGRenderer.chainToPathD(chain, yOff, grid.smoothCorners));
+          allPaths.push(SVGRenderer.chainToPathD(chain, xOff, yOff, grid.smoothCorners));
         }
       }
     };
@@ -1298,17 +1305,17 @@ class SVGRenderer {
     return allPaths;
   }
 
-  static chainToPathD(chain, yOff, smoothCorners) {
+  static chainToPathD(chain, xOff, yOff, smoothCorners) {
     const fmt = (v) => Math.round(v * 1000) / 1000;
     const parts = [];
-    parts.push(`M${fmt(nodeX(chain[0].c))} ${fmt(nodeY(chain[0].r) + yOff)}`);
+    parts.push(`M${fmt(nodeX(chain[0].c) + xOff)} ${fmt(nodeY(chain[0].r) + yOff)}`);
     let lastWasBezier = false; // Prevents H/V merge from overwriting a bezier
 
     for (let i = 1; i < chain.length; i++) {
       const prev = chain[i - 1];
       const cur = chain[i];
       const type = cur.type;
-      const cx = fmt(nodeX(cur.c));
+      const cx = fmt(nodeX(cur.c) + xOff);
       const cy = fmt(nodeY(cur.r) + yOff);
 
       // Smooth corner: when cur is a marked bend node and the chain transitions
@@ -1321,8 +1328,8 @@ class SVGRenderer {
         const next = chain[i + 1];
         const nextType = next.type;
         if ((type === 'H' && nextType === 'V') || (type === 'V' && nextType === 'H')) {
-          const px = nodeX(prev.c), py = nodeY(prev.r) + yOff;
-          const nx = nodeX(next.c), ny = nodeY(next.r) + yOff;
+          const px = nodeX(prev.c) + xOff, py = nodeY(prev.r) + yOff;
+          const nx = nodeX(next.c) + xOff, ny = nodeY(next.r) + yOff;
           const dx = nx - px, dy = ny - py;
           if (type === 'H') {
             // H→V: depart horizontally from prev, arrive vertically into next
@@ -1361,9 +1368,10 @@ class SVGRenderer {
 
 // ─── PatternDecoder ──────────────────────────────────────────────────
 class PatternDecoder {
-  static snapToGrid(x, y, yOff = 0) {
+  static snapToGrid(x, y, xOff = 0, yOff = 0) {
+    const adjX = x - xOff;
     const adjY = y - yOff;
-    const col = Math.round((x - PAD) / CELL);
+    const col = Math.round((adjX - PAD) / CELL);
     const row = Math.round((adjY - PAD) / CELL);
     return {
       r: Math.max(0, Math.min(ROWS - 1, row)),
@@ -1371,7 +1379,9 @@ class PatternDecoder {
     };
   }
 
-  // Extract grids (bit arrays per panel) from a single SVG string
+  // Extract grids (bit arrays per panel) from a single SVG string.
+  // Auto-detects panel layout from viewBox: if width > VB_W * 1.5 the panels
+  // are laid out left-to-right (horizontal), otherwise top-to-bottom (vertical).
   static _extractGrids(svgString) {
     const parser = new DOMParser();
     const doc = parser.parseFromString(svgString, 'image/svg+xml');
@@ -1381,18 +1391,23 @@ class PatternDecoder {
 
     const svg = doc.querySelector('svg');
     const vb = svg?.getAttribute('viewBox')?.split(/\s+/).map(Number);
+    const totalWidth = vb ? vb[2] : VB_W;
     const totalHeight = vb ? vb[3] : VB_H;
-    const panelCount = Math.max(1, Math.round((totalHeight + PANEL_GAP) / (VB_H + PANEL_GAP)));
+    const horizontal = totalWidth > VB_W * 1.5;
+    const panelCount = horizontal
+      ? Math.max(1, Math.round((totalWidth + PANEL_GAP) / (VB_W + PANEL_GAP)))
+      : Math.max(1, Math.round((totalHeight + PANEL_GAP) / (VB_H + PANEL_GAP)));
 
     const panelBits = [];
     for (let p = 0; p < panelCount; p++) {
-      const yOff = p * (VB_H + PANEL_GAP);
+      const xOff = horizontal ? p * (VB_W + PANEL_GAP) : 0;
+      const yOff = horizontal ? 0 : p * (VB_H + PANEL_GAP);
       const grid = new CircuitGrid();
 
       for (const path of paths) {
         const d = path.getAttribute('d');
         if (!d) continue;
-        const edges = PatternDecoder.parsePath(d, yOff);
+        const edges = PatternDecoder.parsePath(d, xOff, yOff);
         for (const edge of edges) {
           if (edge.type === 'H') {
             const minC = Math.min(edge.c1, edge.c2);
@@ -1492,12 +1507,16 @@ class PatternDecoder {
     return { text: fullText, valid: allValid, panels: results, error: firstError?.error || null };
   }
 
-  static parsePath(d, yOff) {
+  static parsePath(d, xOff, yOff) {
     const edges = [];
-    // Y-range for this panel (with half-cell tolerance)
+    // Bounding box for this panel (with half-cell tolerance on each side)
+    const xMin = xOff + PAD - CELL * 0.5;
+    const xMax = xOff + PAD + (COLS - 1) * CELL + CELL * 0.5;
     const yMin = yOff + PAD - CELL * 0.5;
     const yMax = yOff + PAD + (ROWS - 1) * CELL + CELL * 0.5;
-    const inRange = (y) => y >= yMin && y <= yMax;
+    const inX = (x) => x >= xMin && x <= xMax;
+    const inY = (y) => y >= yMin && y <= yMax;
+    const inRange = (x, y) => inX(x) && inY(y);
 
     // Tokenize the path d attribute
     const tokens = d.match(/[MLHVCSQTAZ][^MLHVCSQTAZ]*/gi) || [];
@@ -1516,9 +1535,9 @@ class PatternDecoder {
           break;
         case 'H': {
           const nx = nums[0];
-          if (inRange(cy)) {
-            const snap1 = PatternDecoder.snapToGrid(cx, cy, yOff);
-            const snap2 = PatternDecoder.snapToGrid(nx, cy, yOff);
+          if (inRange(cx, cy) && inRange(nx, cy)) {
+            const snap1 = PatternDecoder.snapToGrid(cx, cy, xOff, yOff);
+            const snap2 = PatternDecoder.snapToGrid(nx, cy, xOff, yOff);
             if (snap1.r === snap2.r) {
               edges.push({ type: 'H', r: snap1.r, c1: snap1.c, c2: snap2.c });
             }
@@ -1528,9 +1547,9 @@ class PatternDecoder {
         }
         case 'V': {
           const ny = nums[0];
-          if (inRange(cy) && inRange(ny)) {
-            const snap1 = PatternDecoder.snapToGrid(cx, cy, yOff);
-            const snap2 = PatternDecoder.snapToGrid(cx, ny, yOff);
+          if (inRange(cx, cy) && inRange(cx, ny)) {
+            const snap1 = PatternDecoder.snapToGrid(cx, cy, xOff, yOff);
+            const snap2 = PatternDecoder.snapToGrid(cx, ny, xOff, yOff);
             if (snap1.c === snap2.c) {
               edges.push({ type: 'V', c: snap1.c, r1: snap1.r, r2: snap2.r });
             }
@@ -1540,9 +1559,9 @@ class PatternDecoder {
         }
         case 'L': {
           const nx = nums[0], ny = nums[1];
-          if (inRange(cy) && inRange(ny)) {
-            const snap1 = PatternDecoder.snapToGrid(cx, cy, yOff);
-            const snap2 = PatternDecoder.snapToGrid(nx, ny, yOff);
+          if (inRange(cx, cy) && inRange(nx, ny)) {
+            const snap1 = PatternDecoder.snapToGrid(cx, cy, xOff, yOff);
+            const snap2 = PatternDecoder.snapToGrid(nx, ny, xOff, yOff);
             if (snap1.r === snap2.r && snap1.c !== snap2.c) {
               edges.push({ type: 'H', r: snap1.r, c1: snap1.c, c2: snap2.c });
             } else if (snap1.c === snap2.c && snap1.r !== snap2.r) {
@@ -1561,9 +1580,9 @@ class PatternDecoder {
             // Standalone fill-diagonal arcs (M+C only, drawCmds=1) are aesthetic and
             // must NOT infer H/V edges — they'd create false positives in the decode.
             // Only infer H/V from beziers that are part of longer chains (drawCmds > 1).
-            if (drawCmds > 1 && inRange(cy) && inRange(ny)) {
-              const snap1 = PatternDecoder.snapToGrid(cx, cy, yOff);
-              const snap2 = PatternDecoder.snapToGrid(nx, ny, yOff);
+            if (drawCmds > 1 && inRange(cx, cy) && inRange(nx, ny)) {
+              const snap1 = PatternDecoder.snapToGrid(cx, cy, xOff, yOff);
+              const snap2 = PatternDecoder.snapToGrid(nx, ny, xOff, yOff);
               const dr = Math.abs(snap2.r - snap1.r);
               const dc = Math.abs(snap2.c - snap1.c);
               if (dr === 1 && dc === 1) {
@@ -1942,12 +1961,17 @@ btnEncode.addEventListener('click', () => {
 
 btnDownloadAll.addEventListener('click', async () => {
   if (!currentSvgs.length) return;
-  const text = inputText.value.trim().toUpperCase() || 'pattern';
-  const folderName = text.replace(/[^A-Z0-9]/g, '_').replace(/_+/g, '_').replace(/^_|_$/g, '') || 'pattern';
+  const rawText = inputText.value.trim();
+  const upperText = rawText.toUpperCase() || 'pattern';
+  const folderName = upperText.replace(/[^A-Z0-9]/g, '_').replace(/_+/g, '_').replace(/^_|_$/g, '') || 'pattern';
   const zip = new JSZip();
   const folder = zip.folder(folderName);
+  // Re-render each variant with panels laid out left-to-right for the export.
+  // The website preview keeps the vertical stack; only the zip uses horizontal.
   for (let v = 0; v < VARIANT_COUNT; v++) {
-    folder.file(`variant-${v + 1}.svg`, currentSvgs[v]);
+    const grids = TextEncoder_.encode(rawText, v);
+    const horizontalSvg = SVGRenderer.render(grids, { horizontal: true });
+    folder.file(`variant-${v + 1}.svg`, horizontalSvg);
   }
   const blob = await zip.generateAsync({ type: 'blob' });
   const url = URL.createObjectURL(blob);
