@@ -2346,7 +2346,7 @@ const SCALE = STROKE_WIDTH / SW_SVG;  // SVG units → mm
 const RADIUS = STROKE_WIDTH / 2;      // mm, half stroke for round caps
 const EXTRUDE = 3;           // mm extrusion depth (Z)
 const CYL_SEGS = 16;
-const BEZIER_SAMPLES = 48;
+const BEZIER_SAMPLES = 16;
 
 // Parse SVG path data into polylines of {x, y} points
 function parseSvgPathsToPolylines(svgString) {
@@ -2751,7 +2751,7 @@ function polylinesToSolidOutline(polylines, scale, radius) {
     co.AddPath(path, ClipperLib.JoinType.jtRound, ClipperLib.EndType.etOpenRound);
   }
 
-  co.ArcTolerance = CLIPPER_SCALE * 0.005; // ~0.005mm arc resolution → ~108 segs / circle
+  co.ArcTolerance = CLIPPER_SCALE * 0.015; // ~0.015mm → ~54 segs / circle (smooth, low-poly)
   co.Execute(solution, radius * CLIPPER_SCALE);
 
   // Clean up with Clipper union to merge overlapping polygons
@@ -2760,6 +2760,10 @@ function polylinesToSolidOutline(polylines, scale, radius) {
   clipper.AddPaths(solution, ClipperLib.PolyType.ptSubject, true);
   clipper.Execute(ClipperLib.ClipType.ctUnion, merged,
     ClipperLib.PolyFillType.pftNonZero, ClipperLib.PolyFillType.pftNonZero);
+
+  // Drop near-collinear and near-coincident vertices to cut face count.
+  // Distance is in Clipper integer units; ~0.02mm tolerance for visible smoothness.
+  ClipperLib.Clipper.CleanPolygons(merged, CLIPPER_SCALE * 0.02);
 
   // Convert back to float mm coordinates
   return merged.map(ring => ring.map(pt => ({
