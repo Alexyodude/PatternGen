@@ -2813,25 +2813,19 @@ btnSTL.addEventListener('click', () => {
 // ─── Outline SVG Export ─────────────────────────────────────────────
 // Exports stroke outlines as closed filled polygons (for Fusion 360 sketch → extrude)
 
-// Returns one d-string per ring. Fusion 360's SVG importer is finicky about
-// multi-subpath paths — it treats them as wire bodies and refuses to extrude.
-// Emitting each ring as its own <path> with an explicit close-line before Z
-// makes Fusion recognize each loop as a closed profile (region).
-function ringsToSvgPaths(rings) {
-  const ds = [];
+// Build one <polygon> element per ring. Fusion 360's SVG importer treats
+// <path> elements as open wire bodies even when they end with Z — that's
+// what triggers the "Cannot create toolbody as multiple wired body is not
+// allowed" error on Extrude. <polygon> is inherently a closed loop with
+// no parser ambiguity, so each ring imports as a closed profile.
+function ringsToSvgPolygons(rings) {
+  const polys = [];
   for (const ring of rings) {
     if (ring.length < 3) continue;
-    const x0 = ring[0].x.toFixed(3);
-    const y0 = ring[0].y.toFixed(3);
-    let d = `M${x0} ${y0}`;
-    for (let i = 1; i < ring.length; i++) {
-      d += `L${ring[i].x.toFixed(3)} ${ring[i].y.toFixed(3)}`;
-    }
-    // Explicit closing segment back to the first point, then Z.
-    d += `L${x0} ${y0}Z`;
-    ds.push(d);
+    const points = ring.map(p => `${p.x.toFixed(3)},${p.y.toFixed(3)}`).join(' ');
+    polys.push(points);
   }
-  return ds;
+  return polys;
 }
 
 function buildOutlineSvg(svgString, scale, radius) {
@@ -2860,11 +2854,11 @@ function buildOutlineSvg(svgString, scale, radius) {
   const w = maxX - minX;
   const h = maxY - minY;
 
-  const pathDs = ringsToSvgPaths(rings);
+  const polygons = ringsToSvgPolygons(rings);
 
   return [
     `<svg xmlns="http://www.w3.org/2000/svg" viewBox="${minX.toFixed(3)} ${minY.toFixed(3)} ${w.toFixed(3)} ${h.toFixed(3)}" width="${w.toFixed(3)}mm" height="${h.toFixed(3)}mm">`,
-    ...pathDs.map(d => `<path d="${d}" fill="black" fill-rule="nonzero"/>`),
+    ...polygons.map(pts => `<polygon points="${pts}" fill="black" fill-rule="nonzero"/>`),
     `</svg>`
   ].join('\n');
 }
