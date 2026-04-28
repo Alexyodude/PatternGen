@@ -2915,26 +2915,62 @@ function buildOutlineDxf(svgString, scale, radius) {
   // Un-flip Y for DXF (DXF uses standard math Y-up, same as Fusion sketch plane).
   const rings = flippedRings.map(ring => ring.map(p => ({ x: p.x, y: -p.y })));
 
-  // DXF group codes: 0=entity type, 8=layer, 90=int count, 70=flags, 10=x, 20=y.
-  // Minimal R12-compatible structure with $INSUNITS=4 (millimeters).
+  // R14+ DXF with required structure for Fusion 360:
+  //   - $ACADVER header (Fusion checks the version)
+  //   - LAYER table with layer "0"
+  //   - LWPOLYLINE entities with AcDbEntity + AcDbPolyline subclass markers
+  //     and unique hex handles (Fusion rejects entities without handles)
+  // Group codes: 0=entity type, 5=handle, 8=layer, 100=subclass, 90=count,
+  //              70=flags, 10=x, 20=y.
   const lines = [];
   const out = (code, val) => { lines.push(String(code), String(val)); };
+  let handle = 0x100;
+  const nextHandle = () => (handle++).toString(16).toUpperCase();
 
+  // HEADER
   out(0, 'SECTION');
   out(2, 'HEADER');
+  out(9, '$ACADVER');
+  out(1, 'AC1014');        // R14
   out(9, '$INSUNITS');
-  out(70, 4); // millimeters
+  out(70, 4);              // 4 = millimeters
+  out(9, '$HANDSEED');
+  out(5, 'FFFF');
   out(0, 'ENDSEC');
 
+  // TABLES (just LAYER "0" — Fusion needs at least one layer table)
+  out(0, 'SECTION');
+  out(2, 'TABLES');
+  out(0, 'TABLE');
+  out(2, 'LAYER');
+  out(5, nextHandle());
+  out(100, 'AcDbSymbolTable');
+  out(70, 1);
+  out(0, 'LAYER');
+  out(5, nextHandle());
+  out(100, 'AcDbSymbolTableRecord');
+  out(100, 'AcDbLayerTableRecord');
+  out(2, '0');             // layer name
+  out(70, 0);              // flags
+  out(62, 7);              // color = white
+  out(6, 'CONTINUOUS');    // linetype
+  out(0, 'ENDTAB');
+  out(0, 'ENDSEC');
+
+  // ENTITIES
   out(0, 'SECTION');
   out(2, 'ENTITIES');
 
   for (const ring of rings) {
     if (ring.length < 3) continue;
     out(0, 'LWPOLYLINE');
-    out(8, '0');           // layer 0
-    out(90, ring.length);  // vertex count
-    out(70, 1);            // 1 = closed
+    out(5, nextHandle());
+    out(100, 'AcDbEntity');
+    out(8, '0');                  // layer
+    out(100, 'AcDbPolyline');
+    out(90, ring.length);         // vertex count
+    out(70, 1);                   // 1 = closed
+    out(43, 0);                   // constant width
     for (const p of ring) {
       out(10, p.x.toFixed(6));
       out(20, p.y.toFixed(6));
