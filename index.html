@@ -2913,14 +2913,22 @@ function buildOutlineDxf(svgString, scale, radius) {
   if (!flippedRings.length) return null;
 
   // Un-flip Y for DXF (DXF uses standard math Y-up, same as Fusion sketch plane).
-  const rings = flippedRings.map(ring => ring.map(p => ({ x: p.x, y: -p.y })));
+  // Translate so all coordinates are non-negative (some DXF importers reject
+  // negative coordinates, and it makes the sketch import drop neatly at origin).
+  const raw = flippedRings.map(ring => ring.map(p => ({ x: p.x, y: -p.y })));
+  let minX = Infinity, minY = Infinity;
+  for (const ring of raw) for (const p of ring) {
+    if (p.x < minX) minX = p.x;
+    if (p.y < minY) minY = p.y;
+  }
+  const dx = -minX, dy = -minY;
+  const rings = raw.map(ring => ring.map(p => ({ x: p.x + dx, y: p.y + dy })));
 
-  // AutoCAD R12 (AC1009) DXF with old-style POLYLINE / VERTEX / SEQEND
-  // entities. R14's LWPOLYLINE was being rejected by Fusion 360, but the
-  // R12 POLYLINE format with a complete TABLES section (LTYPE + LAYER) is
-  // what Fusion's DXF importer parses most reliably.
-  // Group codes: 0=entity, 2=name, 6=linetype, 8=layer, 10=x, 20=y, 30=z,
-  //              62=color, 66=vertices-follow, 70=flags.
+  // Emit each ring as a chain of individual LINE entities (the most basic
+  // and universally-supported DXF entity). LWPOLYLINE and old-style POLYLINE
+  // were both being rejected by Fusion 360's "Insert DXF" with no diagnostic.
+  // LINE is the lowest common denominator and Fusion's sketch importer
+  // joins co-located endpoints into closed profiles automatically.
   const lines = [];
   const out = (code, val) => { lines.push(String(code), String(val)); };
 
@@ -2928,17 +2936,12 @@ function buildOutlineDxf(svgString, scale, radius) {
   out(0, 'SECTION');
   out(2, 'HEADER');
   out(9, '$ACADVER');
-  out(1, 'AC1009');        // R12
+  out(1, 'AC1009');        // R12 — most permissive
   out(9, '$INSUNITS');
   out(70, 4);              // millimeters
-  out(9, '$EXTMIN');
-  out(10, 0); out(20, 0); out(30, 0);
-  out(9, '$EXTMAX');
-  out(10, 1000); out(20, 1000); out(30, 0);
   out(0, 'ENDSEC');
 
-  // TABLES (LTYPE table needs CONTINUOUS defined, not just referenced —
-  // Fusion's parser flags missing linetype definitions as errors.)
+  // TABLES (LTYPE + LAYER, both fully defined)
   out(0, 'SECTION');
   out(2, 'TABLES');
 
@@ -2948,56 +2951,47 @@ function buildOutlineDxf(svgString, scale, radius) {
   out(0, 'LTYPE');
   out(2, 'CONTINUOUS');
   out(70, 0);
-  out(3, 'Solid line');    // description
-  out(72, 65);             // alignment
-  out(73, 0);              // dash count
-  out(40, 0);              // total pattern length
+  out(3, 'Solid line');
+  out(72, 65);
+  out(73, 0);
+  out(40, '0.0');
   out(0, 'ENDTAB');
 
   out(0, 'TABLE');
   out(2, 'LAYER');
   out(70, 1);
   out(0, 'LAYER');
-  out(2, '0');             // layer name
-  out(70, 0);              // flags
-  out(62, 7);              // color = white
-  out(6, 'CONTINUOUS');    // linetype
+  out(2, '0');
+  out(70, 0);
+  out(62, 7);
+  out(6, 'CONTINUOUS');
   out(0, 'ENDTAB');
 
   out(0, 'ENDSEC');
 
-  // BLOCKS (empty — Fusion expects this section to exist even if unused)
-  out(0, 'SECTION');
-  out(2, 'BLOCKS');
-  out(0, 'ENDSEC');
-
-  // ENTITIES — old-style POLYLINE / VERTEX / SEQEND
+  // ENTITIES — one LINE per ring segment.
   out(0, 'SECTION');
   out(2, 'ENTITIES');
 
   for (const ring of rings) {
-    if (ring.length < 3) continue;
-    out(0, 'POLYLINE');
-    out(8, '0');           // layer
-    out(66, 1);            // vertices-follow flag
-    out(70, 1);            // 1 = closed
-    out(10, 0); out(20, 0); out(30, 0); // dummy ref point
-    for (const p of ring) {
-      out(0, 'VERTEX');
+    if (ring.length < 2) continue;
+    for (let i = 0; i < ring.length; i++) {
+      const a = ring[i];
+      const b = ring[(i + 1) % ring.length]; // wrap to close the ring
+      out(0, 'LINE');
       out(8, '0');
-      out(10, p.x.toFixed(6));
-      out(20, p.y.toFixed(6));
-      out(30, 0);
-      out(70, 0);
+      out(10, a.x.toFixed(4));
+      out(20, a.y.toFixed(4));
+      out(30, '0.0');
+      out(11, b.x.toFixed(4));
+      out(21, b.y.toFixed(4));
+      out(31, '0.0');
     }
-    out(0, 'SEQEND');
-    out(8, '0');
   }
 
   out(0, 'ENDSEC');
   out(0, 'EOF');
 
-  // DXF traditionally uses CRLF line endings.
   return lines.join('\r\n') + '\r\n';
 }
 
