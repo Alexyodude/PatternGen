@@ -499,6 +499,7 @@ PatternDecoder &mdash; SVG &rarr; grid &rarr; text</pre>
       <button id="btnShare" disabled>Share Link</button>
       <button id="btnDownloadSTL" disabled>Download All STL</button>
       <button id="btnDownloadOutlineSVG" disabled>Download Outline SVG</button>
+      <button id="btnDownloadOutlineDXF" disabled>Download Outline DXF</button>
     </div>
   </div>
 
@@ -1862,6 +1863,7 @@ const fileInput   = document.getElementById('fileInput');
 const btnShare    = document.getElementById('btnShare');
 const btnSTL      = document.getElementById('btnDownloadSTL');
 const btnOutlineSVG = document.getElementById('btnDownloadOutlineSVG');
+const btnOutlineDXF = document.getElementById('btnDownloadOutlineDXF');
 const toastEl     = document.getElementById('toast');
 const docModal    = document.getElementById('docModal');
 const btnDocs     = document.getElementById('btnDocs');
@@ -1908,6 +1910,7 @@ btnEncode.addEventListener('click', () => {
     btnShare.disabled = true;
     btnSTL.disabled = true;
     btnOutlineSVG.disabled = true;
+    btnOutlineDXF.disabled = true;
     currentSvgs = [];
     return;
   }
@@ -1941,6 +1944,7 @@ btnEncode.addEventListener('click', () => {
     btnShare.disabled = false;
     btnSTL.disabled = false;
     btnOutlineSVG.disabled = false;
+    btnOutlineDXF.disabled = false;
 
     if (isValid) {
       showToast('3 variants encoded — decodes correctly via intersection');
@@ -2320,6 +2324,19 @@ window.PhotoDecoder = PhotoDecoder;
 // Bridge for module script access
 window._getCurrentSvg = () => currentSvgs[selectedVariant];
 window._getAllSvgs = () => currentSvgs;
+// Re-encode the current input with panels laid out left-to-right.
+// Physical exports (STL / outline SVG / DXF) use this so multi-panel glyphs
+// stay at one panel of height (≈24.6mm) instead of stacking vertically.
+window._getHorizontalSvgs = () => {
+  const text = inputText.value.trim();
+  if (!text) return [];
+  const out = [];
+  for (let v = 0; v < VARIANT_COUNT; v++) {
+    const grids = TextEncoder_.encode(text, v);
+    out.push(SVGRenderer.render(grids, { horizontal: true }));
+  }
+  return out;
+};
 window._getSelectedVariant = () => selectedVariant;
 window._getInputText = () => inputText.value.trim().toUpperCase();
 
@@ -2780,7 +2797,7 @@ function buildSolidGeometry(polylines, scale, radius, extrude) {
 
 // Download all 3 variant STLs as watertight solids
 btnSTL.addEventListener('click', () => {
-  const allSvgs = window._getAllSvgs();
+  const allSvgs = window._getHorizontalSvgs();
   if (!allSvgs || !allSvgs.length) return;
 
   const text = window._getInputText() || 'PATTERN';
@@ -2865,7 +2882,7 @@ function buildOutlineSvg(svgString, scale, radius) {
 
 const btnOutlineSVG = document.getElementById('btnDownloadOutlineSVG');
 btnOutlineSVG.addEventListener('click', () => {
-  const allSvgs = window._getAllSvgs();
+  const allSvgs = window._getHorizontalSvgs();
   if (!allSvgs || !allSvgs.length) return;
 
   const text = window._getInputText() || 'PATTERN';
@@ -2880,6 +2897,74 @@ btnOutlineSVG.addEventListener('click', () => {
     const a = document.createElement('a');
     a.href = url;
     a.download = `${baseName}_outline_v${v + 1}.svg`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+});
+
+// ─── Outline DXF Export ─────────────────────────────────────────────
+// Emits one closed LWPOLYLINE per offset ring. Fusion 360 imports DXF as
+// sketch geometry with closed profiles preserved, so Extrude works without
+// the "multiple wired body" error that plagues SVG imports.
+
+function buildOutlineDxf(svgString, scale, radius) {
+  const polylines = parseSvgPathsToPolylines(svgString);
+  const flippedRings = polylinesToSolidOutline(polylines, scale, radius);
+  if (!flippedRings.length) return null;
+
+  // Un-flip Y for DXF (DXF uses standard math Y-up, same as Fusion sketch plane).
+  const rings = flippedRings.map(ring => ring.map(p => ({ x: p.x, y: -p.y })));
+
+  // DXF group codes: 0=entity type, 8=layer, 90=int count, 70=flags, 10=x, 20=y.
+  // Minimal R12-compatible structure with $INSUNITS=4 (millimeters).
+  const lines = [];
+  const out = (code, val) => { lines.push(String(code), String(val)); };
+
+  out(0, 'SECTION');
+  out(2, 'HEADER');
+  out(9, '$INSUNITS');
+  out(70, 4); // millimeters
+  out(0, 'ENDSEC');
+
+  out(0, 'SECTION');
+  out(2, 'ENTITIES');
+
+  for (const ring of rings) {
+    if (ring.length < 3) continue;
+    out(0, 'LWPOLYLINE');
+    out(8, '0');           // layer 0
+    out(90, ring.length);  // vertex count
+    out(70, 1);            // 1 = closed
+    for (const p of ring) {
+      out(10, p.x.toFixed(6));
+      out(20, p.y.toFixed(6));
+    }
+  }
+
+  out(0, 'ENDSEC');
+  out(0, 'EOF');
+
+  // DXF traditionally uses CRLF line endings.
+  return lines.join('\r\n') + '\r\n';
+}
+
+const btnOutlineDXF = document.getElementById('btnDownloadOutlineDXF');
+btnOutlineDXF.addEventListener('click', () => {
+  const allSvgs = window._getHorizontalSvgs();
+  if (!allSvgs || !allSvgs.length) return;
+
+  const text = window._getInputText() || 'PATTERN';
+  const baseName = text.replace(/[^A-Z0-9]/g, '_').replace(/_+/g, '_').replace(/^_|_$/g, '') || 'PATTERN';
+
+  for (let v = 0; v < allSvgs.length; v++) {
+    const dxf = buildOutlineDxf(allSvgs[v], SCALE, RADIUS);
+    if (!dxf) continue;
+
+    const blob = new Blob([dxf], { type: 'application/dxf' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${baseName}_outline_v${v + 1}.dxf`;
     a.click();
     URL.revokeObjectURL(url);
   }
