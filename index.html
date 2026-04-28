@@ -2903,9 +2903,9 @@ btnOutlineSVG.addEventListener('click', () => {
 });
 
 // ─── Outline DXF Export ─────────────────────────────────────────────
-// Emits one closed LWPOLYLINE per offset ring. Fusion 360 imports DXF as
-// sketch geometry with closed profiles preserved, so Extrude works without
-// the "multiple wired body" error that plagues SVG imports.
+// Emits one closed POLYLINE (old R12-style) per offset ring. Fusion 360
+// imports DXF as sketch geometry with closed profiles preserved, so Extrude
+// works without the "multiple wired body" error that plagues SVG imports.
 
 function buildOutlineDxf(svgString, scale, radius) {
   const polylines = parseSvgPathsToPolylines(svgString);
@@ -2915,66 +2915,83 @@ function buildOutlineDxf(svgString, scale, radius) {
   // Un-flip Y for DXF (DXF uses standard math Y-up, same as Fusion sketch plane).
   const rings = flippedRings.map(ring => ring.map(p => ({ x: p.x, y: -p.y })));
 
-  // R14+ DXF with required structure for Fusion 360:
-  //   - $ACADVER header (Fusion checks the version)
-  //   - LAYER table with layer "0"
-  //   - LWPOLYLINE entities with AcDbEntity + AcDbPolyline subclass markers
-  //     and unique hex handles (Fusion rejects entities without handles)
-  // Group codes: 0=entity type, 5=handle, 8=layer, 100=subclass, 90=count,
-  //              70=flags, 10=x, 20=y.
+  // AutoCAD R12 (AC1009) DXF with old-style POLYLINE / VERTEX / SEQEND
+  // entities. R14's LWPOLYLINE was being rejected by Fusion 360, but the
+  // R12 POLYLINE format with a complete TABLES section (LTYPE + LAYER) is
+  // what Fusion's DXF importer parses most reliably.
+  // Group codes: 0=entity, 2=name, 6=linetype, 8=layer, 10=x, 20=y, 30=z,
+  //              62=color, 66=vertices-follow, 70=flags.
   const lines = [];
   const out = (code, val) => { lines.push(String(code), String(val)); };
-  let handle = 0x100;
-  const nextHandle = () => (handle++).toString(16).toUpperCase();
 
   // HEADER
   out(0, 'SECTION');
   out(2, 'HEADER');
   out(9, '$ACADVER');
-  out(1, 'AC1014');        // R14
+  out(1, 'AC1009');        // R12
   out(9, '$INSUNITS');
-  out(70, 4);              // 4 = millimeters
-  out(9, '$HANDSEED');
-  out(5, 'FFFF');
+  out(70, 4);              // millimeters
+  out(9, '$EXTMIN');
+  out(10, 0); out(20, 0); out(30, 0);
+  out(9, '$EXTMAX');
+  out(10, 1000); out(20, 1000); out(30, 0);
   out(0, 'ENDSEC');
 
-  // TABLES (just LAYER "0" — Fusion needs at least one layer table)
+  // TABLES (LTYPE table needs CONTINUOUS defined, not just referenced —
+  // Fusion's parser flags missing linetype definitions as errors.)
   out(0, 'SECTION');
   out(2, 'TABLES');
+
+  out(0, 'TABLE');
+  out(2, 'LTYPE');
+  out(70, 1);
+  out(0, 'LTYPE');
+  out(2, 'CONTINUOUS');
+  out(70, 0);
+  out(3, 'Solid line');    // description
+  out(72, 65);             // alignment
+  out(73, 0);              // dash count
+  out(40, 0);              // total pattern length
+  out(0, 'ENDTAB');
+
   out(0, 'TABLE');
   out(2, 'LAYER');
-  out(5, nextHandle());
-  out(100, 'AcDbSymbolTable');
   out(70, 1);
   out(0, 'LAYER');
-  out(5, nextHandle());
-  out(100, 'AcDbSymbolTableRecord');
-  out(100, 'AcDbLayerTableRecord');
   out(2, '0');             // layer name
   out(70, 0);              // flags
   out(62, 7);              // color = white
   out(6, 'CONTINUOUS');    // linetype
   out(0, 'ENDTAB');
+
   out(0, 'ENDSEC');
 
-  // ENTITIES
+  // BLOCKS (empty — Fusion expects this section to exist even if unused)
+  out(0, 'SECTION');
+  out(2, 'BLOCKS');
+  out(0, 'ENDSEC');
+
+  // ENTITIES — old-style POLYLINE / VERTEX / SEQEND
   out(0, 'SECTION');
   out(2, 'ENTITIES');
 
   for (const ring of rings) {
     if (ring.length < 3) continue;
-    out(0, 'LWPOLYLINE');
-    out(5, nextHandle());
-    out(100, 'AcDbEntity');
-    out(8, '0');                  // layer
-    out(100, 'AcDbPolyline');
-    out(90, ring.length);         // vertex count
-    out(70, 1);                   // 1 = closed
-    out(43, 0);                   // constant width
+    out(0, 'POLYLINE');
+    out(8, '0');           // layer
+    out(66, 1);            // vertices-follow flag
+    out(70, 1);            // 1 = closed
+    out(10, 0); out(20, 0); out(30, 0); // dummy ref point
     for (const p of ring) {
+      out(0, 'VERTEX');
+      out(8, '0');
       out(10, p.x.toFixed(6));
       out(20, p.y.toFixed(6));
+      out(30, 0);
+      out(70, 0);
     }
+    out(0, 'SEQEND');
+    out(8, '0');
   }
 
   out(0, 'ENDSEC');
