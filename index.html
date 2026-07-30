@@ -545,12 +545,12 @@ PatternDecoder &mdash; SVG &rarr; grid &rarr; text</pre>
 
   <!-- Decode Section -->
   <div class="panel">
-    <div class="panel-label">Decode Pattern (drop or select 3 variant files: SVG, STL, or images)</div>
+    <div class="panel-label">Decode Pattern (drop 3 variant photos or files: SVG, STL, images)</div>
     <div class="decode-area">
       <textarea id="svgInput" placeholder="Paste all 3 SVG variants here (separated by blank lines) to decode..."></textarea>
       <div class="drop-zone" id="dropZone">
-        <span>Drop 3 files</span>
-        <span>SVG, STL, or Image</span>
+        <span>Drop 3 files here</span>
+        <span>Photos, SVG, STL, or screenshots</span>
         <input type="file" id="fileInput" accept=".svg,.stl,.png,.jpg,.jpeg,.webp,.bmp" multiple>
       </div>
     </div>
@@ -558,6 +558,14 @@ PatternDecoder &mdash; SVG &rarr; grid &rarr; text</pre>
       <button id="btnDecode">Decode (3 variants)</button>
     </div>
     <div id="decodeStatus" style="font-size: 0.78rem; color: #7777aa; margin-top: 0.4rem; min-height: 1.2em;"></div>
+    <div id="detectionPreview" style="display:none; margin-top:0.75rem;">
+      <div style="font-size:0.65rem; text-transform:uppercase; letter-spacing:0.1em; color:#5555aa; font-weight:600; margin-bottom:0.4rem;">Detection Preview</div>
+      <div style="display:flex; gap:0.5rem;">
+        <canvas id="detectCanvas0" style="flex:1; border-radius:6px; background:#0d0d1a;"></canvas>
+        <canvas id="detectCanvas1" style="flex:1; border-radius:6px; background:#0d0d1a;"></canvas>
+        <canvas id="detectCanvas2" style="flex:1; border-radius:6px; background:#0d0d1a;"></canvas>
+      </div>
+    </div>
     <div class="decoded-output" id="decodedOutput"></div>
   </div>
 
@@ -1713,55 +1721,391 @@ class STLDecoder {
 }
 
 // ─── PhotoDecoder ────────────────────────────────────────────────────
-// Decodes photos/screenshots of the pattern back to text.
-// Strategy: find bright-pixel bounding box → map SVG grid coords → sample edge midpoints.
-// Works best with well-lit, straight-on captures. No perspective correction.
+// Robust photo decoder for phone photos of the 3D preview.
+// Pipeline: downscale → grayscale → box blur → integral image → adaptive threshold
+//         → auto-rotation → primary band isolation → local contrast edge sampling.
 class PhotoDecoder {
-  static extractGrids(img) {
+  // Load image to canvas, downscale if needed, return grayscale Float32Array
+  static loadAndDownscale(img) {
     const canvas = document.createElement('canvas');
-    const w = img.naturalWidth || img.width;
-    const h = img.naturalHeight || img.height;
+    let w = img.naturalWidth || img.width;
+    let h = img.naturalHeight || img.height;
+    const maxDim = 2000;
+    if (Math.max(w, h) > maxDim) {
+      const scale = maxDim / Math.max(w, h);
+      w = Math.round(w * scale);
+      h = Math.round(h * scale);
+    }
     canvas.width = w;
     canvas.height = h;
     const ctx = canvas.getContext('2d');
-    ctx.drawImage(img, 0, 0);
-
+    ctx.drawImage(img, 0, 0, w, h);
     const imgData = ctx.getImageData(0, 0, w, h);
     const pixels = imgData.data;
-
-    // Convert to grayscale
-    const gray = new Uint8Array(w * h);
+    const gray = new Float32Array(w * h);
     for (let i = 0; i < w * h; i++) {
       const off = i * 4;
       gray[i] = pixels[off] * 0.299 + pixels[off + 1] * 0.587 + pixels[off + 2] * 0.114;
     }
+    return { gray, w, h };
+  }
 
-    // Auto-detect background: sample image corners
-    const cornerSamples = [
-      gray[0], gray[w - 1], gray[(h - 1) * w], gray[(h - 1) * w + w - 1]
-    ];
-    const avgCorner = cornerSamples.reduce((a, b) => a + b, 0) / 4;
-    const darkBg = avgCorner < 128;
-    const threshold = darkBg ? 100 : 155;
-    const isBright = darkBg ? (v => v > threshold) : (v => v < threshold);
+  // In-place box blur (horizontal then vertical pass)
+  static boxBlur(gray, w, h, radius) {
+    const r = radius;
+    const diam = 2 * r + 1;
+    const tmp = new Float32Array(w * h);
+    // Horizontal pass
+    for (let y = 0; y < h; y++) {
+      let sum = 0;
+      for (let x = 0; x < Math.min(r, w); x++) sum += gray[y * w + x];
+      // Left edge: pad with first pixel
+      sum += gray[y * w] * (r + 1 - Math.min(r, w) + r);
+      // Actually recompute properly
+      sum = 0;
+      for (let x = -r; x <= r; x++) {
+        sum += gray[y * w + Math.max(0, Math.min(w - 1, x))];
+      }
+      tmp[y * w] = sum / diam;
+      for (let x = 1; x < w; x++) {
+        const addIdx = Math.min(w - 1, x + r);
+        const remIdx = Math.max(0, x - r - 1);
+        sum += gray[y * w + addIdx] - gray[y * w + remIdx];
+        tmp[y * w + x] = sum / diam;
+      }
+    }
+    // Vertical pass
+    for (let x = 0; x < w; x++) {
+      let sum = 0;
+      for (let y = -r; y <= r; y++) {
+        sum += tmp[Math.max(0, Math.min(h - 1, y)) * w + x];
+      }
+      gray[x] = sum / diam;
+      for (let y = 1; y < h; y++) {
+        const addIdx = Math.min(h - 1, y + r);
+        const remIdx = Math.max(0, y - r - 1);
+        sum += tmp[addIdx * w + x] - tmp[remIdx * w + x];
+        gray[y * w + x] = sum / diam;
+      }
+    }
+    return gray;
+  }
 
-    // Find bounding box of pattern pixels
-    let bMinX = w, bMaxX = 0, bMinY = h, bMaxY = 0;
+  // Build summed area table for O(1) rectangle mean queries
+  static buildIntegralImage(gray, w, h) {
+    const stride = w + 1;
+    const integral = new Float64Array(stride * (h + 1));
+    for (let y = 0; y < h; y++) {
+      let rowSum = 0;
+      for (let x = 0; x < w; x++) {
+        rowSum += gray[y * w + x];
+        integral[(y + 1) * stride + (x + 1)] = rowSum + integral[y * stride + (x + 1)];
+      }
+    }
+    return integral;
+  }
+
+  // Otsu's method: find optimal global threshold separating bimodal distribution
+  static otsuThreshold(gray, w, h) {
+    const hist = new Array(256).fill(0);
+    for (let i = 0; i < w * h; i++) {
+      hist[Math.min(255, Math.max(0, Math.round(gray[i])))]++;
+    }
+    const total = w * h;
+    let sumAll = 0;
+    for (let i = 0; i < 256; i++) sumAll += i * hist[i];
+
+    let sumBg = 0, wBg = 0;
+    let maxVariance = 0, bestThresh = 128;
+    for (let t = 0; t < 256; t++) {
+      wBg += hist[t];
+      if (wBg === 0) continue;
+      const wFg = total - wBg;
+      if (wFg === 0) break;
+      sumBg += t * hist[t];
+      const meanBg = sumBg / wBg;
+      const meanFg = (sumAll - sumBg) / wFg;
+      const variance = wBg * wFg * (meanBg - meanFg) * (meanBg - meanFg);
+      if (variance > maxVariance) {
+        maxVariance = variance;
+        bestThresh = t;
+      }
+    }
+    return bestThresh;
+  }
+
+  // O(1) mean of rectangle [x1..x2, y1..y2] inclusive, using integral image
+  static rectMean(integral, stride, x1, y1, x2, y2) {
+    const area = (x2 - x1 + 1) * (y2 - y1 + 1);
+    if (area <= 0) return 0;
+    const sum = integral[(y2 + 1) * stride + (x2 + 1)]
+              - integral[y1 * stride + (x2 + 1)]
+              - integral[(y2 + 1) * stride + x1]
+              + integral[y1 * stride + x1];
+    return sum / area;
+  }
+
+  // Adaptive threshold: pixel bright if value > localMean * mult
+  static adaptiveThreshold(gray, integral, w, h, blockSize, mult) {
+    const mask = new Uint8Array(w * h);
+    const half = Math.floor(blockSize / 2);
+    const stride = w + 1;
+    for (let y = 0; y < h; y++) {
+      const y1 = Math.max(0, y - half);
+      const y2 = Math.min(h - 1, y + half);
+      for (let x = 0; x < w; x++) {
+        const x1 = Math.max(0, x - half);
+        const x2 = Math.min(w - 1, x + half);
+        const localMean = PhotoDecoder.rectMean(integral, stride, x1, y1, x2, y2);
+        mask[y * w + x] = gray[y * w + x] > localMean * mult ? 1 : 0;
+      }
+    }
+    return mask;
+  }
+
+  // Rotate grayscale array 90° clockwise
+  static rotateGray90CW(gray, w, h) {
+    const nw = h, nh = w;
+    const out = new Float32Array(nw * nh);
     for (let y = 0; y < h; y++) {
       for (let x = 0; x < w; x++) {
-        if (isBright(gray[y * w + x])) {
-          if (x < bMinX) bMinX = x;
-          if (x > bMaxX) bMaxX = x;
-          if (y < bMinY) bMinY = y;
-          if (y > bMaxY) bMaxY = y;
+        out[x * nw + (h - 1 - y)] = gray[y * w + x];
+      }
+    }
+    return { gray: out, w: nw, h: nh };
+  }
+
+  // Rotate grayscale array 90° counter-clockwise
+  static rotateGray90CCW(gray, w, h) {
+    const nw = h, nh = w;
+    const out = new Float32Array(nw * nh);
+    for (let y = 0; y < h; y++) {
+      for (let x = 0; x < w; x++) {
+        out[(w - 1 - x) * nw + y] = gray[y * w + x];
+      }
+    }
+    return { gray: out, w: nw, h: nh };
+  }
+
+  // Score a candidate rectangle by summing contrast at expected grid edge positions.
+  // Higher score = better alignment with an actual circuit pattern.
+  static _scoreCandidate(gray, integral, w, h, band, panels) {
+    const bandW = band.right - band.left;
+    const bandH = band.bottom - band.top;
+    const totalSvgH = panels * VB_H + (panels - 1) * PANEL_GAP;
+    const strokePx = Math.max(2, Math.round((SW / VB_W) * bandW));
+    const innerR = Math.max(1, Math.round(0.3 * strokePx));
+    const outerR = Math.max(innerR + 2, Math.round(0.8 * strokePx));
+    const stride = w + 1;
+
+    const svgToImgX = (svgX) => band.left + (svgX / VB_W) * bandW;
+    const svgToImgY = (svgY) => band.top + (svgY / totalSvgH) * bandH;
+
+    let totalContrast = 0;
+
+    const sample = (imgX, imgY) => {
+      const cx = Math.round(imgX), cy = Math.round(imgY);
+      if (cx < outerR || cx >= w - outerR || cy < outerR || cy >= h - outerR) return 0;
+      const ix1 = cx - innerR, iy1 = cy - innerR, ix2 = cx + innerR, iy2 = cy + innerR;
+      const innerMean = PhotoDecoder.rectMean(integral, stride, ix1, iy1, ix2, iy2);
+      const ox1 = cx - outerR, oy1 = cy - outerR, ox2 = cx + outerR, oy2 = cy + outerR;
+      const outerArea = (ox2 - ox1 + 1) * (oy2 - oy1 + 1) - (ix2 - ix1 + 1) * (iy2 - iy1 + 1);
+      if (outerArea <= 0) return 0;
+      const outerSum = PhotoDecoder.rectMean(integral, stride, ox1, oy1, ox2, oy2)
+                       * (ox2 - ox1 + 1) * (oy2 - oy1 + 1)
+                       - innerMean * (ix2 - ix1 + 1) * (iy2 - iy1 + 1);
+      return Math.max(0, innerMean - outerSum / outerArea);
+    };
+
+    for (let p = 0; p < panels; p++) {
+      const yOff = p * (VB_H + PANEL_GAP);
+      for (let r = 0; r < ROWS; r++) {
+        for (let c = 0; c < COLS - 1; c++) {
+          totalContrast += sample(svgToImgX(PAD + (c + 0.5) * CELL), svgToImgY(yOff + PAD + r * CELL));
+        }
+      }
+      for (let r = 0; r < ROWS - 1; r++) {
+        for (let c = 0; c < COLS; c++) {
+          totalContrast += sample(svgToImgX(PAD + c * CELL), svgToImgY(yOff + PAD + (r + 0.5) * CELL));
         }
       }
     }
-    if (bMaxX <= bMinX || bMaxY <= bMinY) return null;
+    // Normalize by number of edge positions so multi-panel doesn't win by having more samples
+    const edgeCount = panels * (ROWS * (COLS - 1) + (ROWS - 1) * COLS); // 148 per panel
+    return totalContrast / edgeCount;
+  }
 
-    const bboxW = bMaxX - bMinX;
-    const bboxH = bMaxY - bMinY;
-    const aspect = bboxW / bboxH;
+  // Find the pattern region by grid search: try many candidate rectangles
+  // with known aspect ratios and pick the one with best edge alignment score.
+  // Two-phase: coarse search then fine-tuning around best result.
+  static findPrimaryBand(gray, w, h, integral) {
+    let bestBand = null;
+    let bestScore = -1;
+    let bestPanels = 1;
+    let candidateCount = 0;
+
+    // Phase 1: Coarse search (1-3 panel configurations)
+    for (let panels = 1; panels <= 3; panels++) {
+      const totalSvgH = panels * VB_H + (panels - 1) * PANEL_GAP;
+      const targetAspect = VB_W / totalSvgH;
+
+      for (let scalePct = 30; scalePct <= 98; scalePct += 5) {
+        const bandW = Math.round(w * scalePct / 100);
+        const bandH = Math.round(bandW / targetAspect);
+        if (bandH >= h) continue;
+
+        for (let yPct = 15; yPct <= 85; yPct += 5) {
+          for (let xPct = 20; xPct <= 80; xPct += 5) {
+            const cx = Math.round(w * xPct / 100);
+            const cy = Math.round(h * yPct / 100);
+            const left = cx - Math.round(bandW / 2);
+            const right = left + bandW;
+            const top = cy - Math.round(bandH / 2);
+            const bottom = top + bandH;
+            if (left < 0 || right >= w || top < 0 || bottom >= h) continue;
+
+            candidateCount++;
+            const score = PhotoDecoder._scoreCandidate(gray, integral, w, h,
+              { top, bottom, left, right }, panels);
+            if (score > bestScore) {
+              bestScore = score;
+              bestBand = { top, bottom, left, right };
+              bestPanels = panels;
+            }
+          }
+        }
+      }
+    }
+    console.log(`Coarse search: ${candidateCount} candidates, best score=${bestScore.toFixed(1)}, panels=${bestPanels}`);
+
+    // Phase 2: Fine-tuning around best coarse result
+    if (bestBand) {
+      const bw0 = bestBand.right - bestBand.left;
+      const cx0 = Math.round((bestBand.left + bestBand.right) / 2);
+      const cy0 = Math.round((bestBand.top + bestBand.bottom) / 2);
+      const totalSvgH = bestPanels * VB_H + (bestPanels - 1) * PANEL_GAP;
+      const targetAspect = VB_W / totalSvgH;
+      // Fine steps: ~0.5% of image for position, ~1% for scale
+      const posStep = Math.max(4, Math.round(w * 0.005));
+      const scaleStep = Math.max(3, Math.round(bw0 * 0.01));
+      for (let dw = -scaleStep * 5; dw <= scaleStep * 5; dw += scaleStep) {
+        const bandW = bw0 + dw;
+        if (bandW <= 0) continue;
+        const bandH = Math.round(bandW / targetAspect);
+        if (bandH >= h) continue;
+        for (let dy = -posStep * 6; dy <= posStep * 6; dy += posStep) {
+          for (let dx = -posStep * 6; dx <= posStep * 6; dx += posStep) {
+            const cx = cx0 + dx;
+            const cy = cy0 + dy;
+            const left = cx - Math.round(bandW / 2);
+            const right = left + bandW;
+            const top = cy - Math.round(bandH / 2);
+            const bottom = top + bandH;
+            if (left < 0 || right >= w || top < 0 || bottom >= h) continue;
+            candidateCount++;
+            const score = PhotoDecoder._scoreCandidate(gray, integral, w, h,
+              { top, bottom, left, right }, bestPanels);
+            if (score > bestScore) {
+              bestScore = score;
+              bestBand = { top, bottom, left, right };
+            }
+          }
+        }
+      }
+    }
+
+    console.log(`Grid search total: ${candidateCount} candidates, best score=${bestScore.toFixed(1)}, panels=${bestPanels}`);
+    if (bestBand) {
+      const bw = bestBand.right - bestBand.left;
+      const bh = bestBand.bottom - bestBand.top;
+      console.log(`Best band: ${bestBand.left},${bestBand.top} → ${bestBand.right},${bestBand.bottom} (${bw}x${bh}, aspect=${(bw/bh).toFixed(2)})`);
+    }
+    return bestBand;
+  }
+
+  // Sample a single H or V edge using local contrast with multi-point voting
+  static sampleEdge(gray, integral, w, h, imgX, imgY, strokePx, cellPx, edgeType) {
+    const stride = w + 1;
+    const innerR = Math.max(1, Math.round(0.3 * strokePx));
+    const outerR = Math.max(innerR + 2, Math.round(0.8 * strokePx));
+
+    // Sample points: center + 2 offsets along edge direction
+    const offsets = [0, -0.25 * cellPx, 0.25 * cellPx];
+    let votes = 0;
+
+    for (const off of offsets) {
+      let sx = imgX, sy = imgY;
+      if (edgeType === 'H') sx += off;
+      else sy += off;
+
+      const cx = Math.round(sx), cy = Math.round(sy);
+
+      // Inner region mean
+      const ix1 = Math.max(0, cx - innerR), iy1 = Math.max(0, cy - innerR);
+      const ix2 = Math.min(w - 1, cx + innerR), iy2 = Math.min(h - 1, cy + innerR);
+      const innerMean = PhotoDecoder.rectMean(integral, stride, ix1, iy1, ix2, iy2);
+
+      // Outer region mean (full outer box minus inner)
+      const ox1 = Math.max(0, cx - outerR), oy1 = Math.max(0, cy - outerR);
+      const ox2 = Math.min(w - 1, cx + outerR), oy2 = Math.min(h - 1, cy + outerR);
+      const outerArea = (ox2 - ox1 + 1) * (oy2 - oy1 + 1) - (ix2 - ix1 + 1) * (iy2 - iy1 + 1);
+      if (outerArea <= 0) { votes++; continue; } // Edge of image, assume present
+      const outerSum = PhotoDecoder.rectMean(integral, stride, ox1, oy1, ox2, oy2)
+                       * (ox2 - ox1 + 1) * (oy2 - oy1 + 1)
+                       - innerMean * (ix2 - ix1 + 1) * (iy2 - iy1 + 1);
+      const outerMean = outerSum / outerArea;
+
+      // Contrast threshold: edge present if inner is brighter than outer
+      // Low threshold (5) for phone photos of screens where contrast is ~10-30 gray levels
+      const contrastThresh = 5;
+      if (innerMean > outerMean + contrastThresh) votes++;
+    }
+
+    return votes >= 2 ? 1 : 0; // Majority vote
+  }
+
+  // Main extraction: process one image → array of per-panel bit arrays
+  // Options: { threshMult, rotation } for retry logic
+  static extractGrids(img, options = {}) {
+    const threshMult = options.threshMult || 1.0;
+    const rotation = options.rotation || 'none'; // 'none', 'cw', 'ccw'
+
+    // Step 1: Load and downscale
+    let { gray, w, h } = PhotoDecoder.loadAndDownscale(img);
+    console.log(`Photo: ${w}x${h}, rotation=${rotation}, threshMult=${threshMult}`);
+
+    // Step 2: Box blur to reduce moiré/noise
+    const blurRadius = Math.max(2, Math.round(Math.max(w, h) / 500));
+    PhotoDecoder.boxBlur(gray, w, h, blurRadius);
+
+    // Step 3: Apply rotation if requested
+    if (rotation === 'cw') {
+      const rot = PhotoDecoder.rotateGray90CW(gray, w, h);
+      gray = rot.gray; w = rot.w; h = rot.h;
+    } else if (rotation === 'ccw') {
+      const rot = PhotoDecoder.rotateGray90CCW(gray, w, h);
+      gray = rot.gray; w = rot.w; h = rot.h;
+    }
+
+    // Step 4: Build integral image for edge sampling
+    const integral = PhotoDecoder.buildIntegralImage(gray, w, h);
+
+    return PhotoDecoder._extractFromProcessed(gray, integral, w, h, threshMult);
+  }
+
+  // Extract grid bits from processed grayscale + integral
+  // Uses brightness sampling at edge midpoints + Otsu thresholding on the
+  // 148 brightness values to adaptively classify edges as present/absent.
+  static _extractFromProcessed(gray, integral, w, h, threshMult = 1.0) {
+    const band = PhotoDecoder.findPrimaryBand(gray, w, h, integral);
+    if (!band) { console.log('findPrimaryBand returned null'); return null; }
+
+    const bandW = band.right - band.left;
+    const bandH = band.bottom - band.top;
+    if (bandW <= 0 || bandH <= 0) return null;
+
+    const aspect = bandW / bandH;
+    console.log(`Band: ${bandW}x${bandH}, aspect=${aspect.toFixed(2)}, expected ~${(VB_W/VB_H).toFixed(2)}`);
 
     // Determine panel count from aspect ratio
     let bestPanels = 1, bestDiff = Infinity;
@@ -1770,55 +2114,171 @@ class PhotoDecoder {
       const diff = Math.abs(aspect - VB_W / expectedH);
       if (diff < bestDiff) { bestDiff = diff; bestPanels = p; }
     }
-
     const panelCount = bestPanels;
     const totalSvgH = panelCount * VB_H + (panelCount - 1) * PANEL_GAP;
+    console.log(`Panels: ${panelCount}`);
 
-    // Map SVG coords to image pixel coords
-    const svgToImgX = (svgX) => bMinX + (svgX / VB_W) * bboxW;
-    const svgToImgY = (svgY) => bMinY + (svgY / totalSvgH) * bboxH;
+    const svgToImgX = (svgX) => band.left + (svgX / VB_W) * bandW;
+    const svgToImgY = (svgY) => band.top + (svgY / totalSvgH) * bandH;
 
-    // Sampling radius proportional to stroke width in pixels
-    const strokePx = Math.max(2, Math.round((SW / VB_W) * bboxW / 3));
-
-    const sample = (imgX, imgY) => {
-      const cx = Math.round(imgX), cy = Math.round(imgY);
-      let bright = 0, total = 0;
-      const r = Math.min(strokePx, 8);
-      for (let dy = -r; dy <= r; dy++) {
-        for (let dx = -r; dx <= r; dx++) {
-          const px = cx + dx, py = cy + dy;
-          if (px >= 0 && px < w && py >= 0 && py < h) {
-            total++;
-            if (isBright(gray[py * w + px])) bright++;
-          }
-        }
-      }
-      return total > 0 && (bright / total) > 0.3 ? 1 : 0;
-    };
+    const strokePx = Math.max(2, Math.round((SW / VB_W) * bandW));
+    const patchR = Math.max(1, Math.round(0.25 * strokePx));
+    const stride = w + 1;
+    console.log(`strokePx=${strokePx}, patchR=${patchR}`);
 
     const panelBits = [];
+    const edgeResults = [];
     for (let p = 0; p < panelCount; p++) {
       const yOff = p * (VB_H + PANEL_GAP);
-      const grid = new CircuitGrid();
 
+      // Sample brightness at all 148 edge midpoints
+      const edgeSamples = [];
+      const edgePositions = [];
+
+      // Horizontal edges
       for (let r = 0; r < ROWS; r++) {
         for (let c = 0; c < COLS - 1; c++) {
-          if (sample(svgToImgX(PAD + (c + 0.5) * CELL), svgToImgY(yOff + PAD + r * CELL)))
-            grid.setH(r, c, 1);
+          const imgX = Math.round(svgToImgX(PAD + (c + 0.5) * CELL));
+          const imgY = Math.round(svgToImgY(yOff + PAD + r * CELL));
+          const x1 = Math.max(0, imgX - patchR), y1 = Math.max(0, imgY - patchR);
+          const x2 = Math.min(w - 1, imgX + patchR), y2 = Math.min(h - 1, imgY + patchR);
+          edgeSamples.push(PhotoDecoder.rectMean(integral, stride, x1, y1, x2, y2));
+          edgePositions.push({ type: 'H', r, c });
         }
       }
 
+      // Vertical edges
       for (let r = 0; r < ROWS - 1; r++) {
         for (let c = 0; c < COLS; c++) {
-          if (sample(svgToImgX(PAD + c * CELL), svgToImgY(yOff + PAD + (r + 0.5) * CELL)))
-            grid.setV(r, c, 1);
+          const imgX = Math.round(svgToImgX(PAD + c * CELL));
+          const imgY = Math.round(svgToImgY(yOff + PAD + (r + 0.5) * CELL));
+          const x1 = Math.max(0, imgX - patchR), y1 = Math.max(0, imgY - patchR);
+          const x2 = Math.min(w - 1, imgX + patchR), y2 = Math.min(h - 1, imgY + patchR);
+          edgeSamples.push(PhotoDecoder.rectMean(integral, stride, x1, y1, x2, y2));
+          edgePositions.push({ type: 'V', r, c });
         }
       }
 
+      // Adaptive Otsu threshold on the 148 brightness samples
+      // Bimodal distribution: dark=absent edges, bright=present edges
+      const sorted = [...edgeSamples].sort((a, b) => a - b);
+      const minB = sorted[0], maxB = sorted[sorted.length - 1];
+      const range = maxB - minB;
+
+      let bestThresh = (minB + maxB) / 2;
+      let bestVariance = -1;
+      const steps = 50;
+      for (let t = 0; t < steps; t++) {
+        const thresh = minB + range * (t + 0.5) / steps;
+        let nBelow = 0, sumBelow = 0, nAbove = 0, sumAbove = 0;
+        for (const v of edgeSamples) {
+          if (v <= thresh) { nBelow++; sumBelow += v; }
+          else { nAbove++; sumAbove += v; }
+        }
+        if (nBelow === 0 || nAbove === 0) continue;
+        const diff = sumBelow / nBelow - sumAbove / nAbove;
+        const variance = nBelow * nAbove * diff * diff;
+        if (variance > bestVariance) {
+          bestVariance = variance;
+          bestThresh = thresh;
+        }
+      }
+
+      // Apply threshMult: <1 = more permissive (more edges), >1 = stricter (fewer edges)
+      const adjustedThresh = bestThresh * threshMult;
+      const grid = new CircuitGrid();
+      let hCount = 0, vCount = 0;
+      const edgePresent = [];
+      for (let i = 0; i < edgeSamples.length; i++) {
+        const present = edgeSamples[i] > adjustedThresh;
+        edgePresent.push(present);
+        if (present) {
+          const pos = edgePositions[i];
+          if (pos.type === 'H') { grid.setH(pos.r, pos.c, 1); hCount++; }
+          else { grid.setV(pos.r, pos.c, 1); vCount++; }
+        }
+      }
+
+      console.log(`Panel ${p}: ${hCount}H + ${vCount}V = ${hCount + vCount}/148 edges, brightness=[${minB.toFixed(1)},${maxB.toFixed(1)}], Otsu=${bestThresh.toFixed(1)}, adjusted=${adjustedThresh.toFixed(1)}`);
       panelBits.push(grid.toBitArray());
+      edgeResults.push({ samples: edgeSamples, positions: edgePositions, present: edgePresent, threshold: adjustedThresh, hCount, vCount });
     }
-    return panelBits;
+    const debug = { gray, w, h, band, panelCount, edgeResults, svgToImgX, svgToImgY, totalSvgH };
+    return { panelBits, debug };
+  }
+
+  static drawDebug(canvas, debugInfo, photoIndex) {
+    if (!debugInfo) { canvas.width = canvas.height = 0; return; }
+    const { gray, w, h, band, panelCount, edgeResults, svgToImgX, svgToImgY, totalSvgH } = debugInfo;
+
+    // Scale canvas proportionally, max ~350px wide
+    const maxW = 350;
+    const scale = Math.min(maxW / w, 1);
+    const cw = Math.round(w * scale), ch = Math.round(h * scale);
+    canvas.width = cw; canvas.height = ch;
+    canvas.style.maxWidth = cw + 'px';
+    const ctx = canvas.getContext('2d');
+
+    // Draw grayscale image
+    const imgData = ctx.createImageData(cw, ch);
+    for (let y = 0; y < ch; y++) {
+      for (let x = 0; x < cw; x++) {
+        const sx = Math.min(w - 1, Math.round(x / scale));
+        const sy = Math.min(h - 1, Math.round(y / scale));
+        const v = Math.round(gray[sy * w + sx] * 255);
+        const idx = (y * cw + x) * 4;
+        imgData.data[idx] = v; imgData.data[idx + 1] = v; imgData.data[idx + 2] = v; imgData.data[idx + 3] = 255;
+      }
+    }
+    ctx.putImageData(imgData, 0, 0);
+
+    // Draw band rectangle (cyan)
+    ctx.strokeStyle = 'cyan'; ctx.lineWidth = 1.5;
+    ctx.strokeRect(band.left * scale, band.top * scale, (band.right - band.left) * scale, (band.bottom - band.top) * scale);
+
+    // Draw edges and nodes per panel
+    let totalEdges = 0;
+    let totalThresh = 0;
+    for (let p = 0; p < panelCount; p++) {
+      const er = edgeResults[p];
+      const yOff = p * (VB_H + PANEL_GAP);
+      totalEdges += er.hCount + er.vCount;
+      totalThresh += er.threshold;
+
+      // Draw edges
+      for (let i = 0; i < er.positions.length; i++) {
+        const pos = er.positions[i];
+        const present = er.present[i];
+        let x1s, y1s, x2s, y2s;
+        if (pos.type === 'H') {
+          x1s = svgToImgX(PAD + pos.c * CELL) * scale;
+          x2s = svgToImgX(PAD + (pos.c + 1) * CELL) * scale;
+          y1s = y2s = svgToImgY(yOff + PAD + pos.r * CELL) * scale;
+        } else {
+          x1s = x2s = svgToImgX(PAD + pos.c * CELL) * scale;
+          y1s = svgToImgY(yOff + PAD + pos.r * CELL) * scale;
+          y2s = svgToImgY(yOff + PAD + (pos.r + 1) * CELL) * scale;
+        }
+        ctx.strokeStyle = present ? '#00ff88' : 'rgba(255,60,60,0.25)';
+        ctx.lineWidth = present ? 1.5 : 0.7;
+        ctx.beginPath(); ctx.moveTo(x1s, y1s); ctx.lineTo(x2s, y2s); ctx.stroke();
+      }
+
+      // Draw grid nodes (yellow dots)
+      ctx.fillStyle = '#ffdd00';
+      for (let r = 0; r < ROWS; r++) {
+        for (let c = 0; c < COLS; c++) {
+          const nx = svgToImgX(PAD + c * CELL) * scale;
+          const ny = svgToImgY(yOff + PAD + r * CELL) * scale;
+          ctx.beginPath(); ctx.arc(nx, ny, 1.5, 0, Math.PI * 2); ctx.fill();
+        }
+      }
+    }
+
+    // Info label
+    const avgThresh = panelCount > 0 ? (totalThresh / panelCount).toFixed(1) : '?';
+    ctx.font = '10px monospace'; ctx.fillStyle = 'white';
+    ctx.fillText(`#${photoIndex}  ${totalEdges} edges  T=${avgThresh}`, 4, 12);
   }
 }
 
@@ -2093,7 +2553,10 @@ function readFiles(files) {
 
   const targetFiles = validFiles.slice(0, 3);
 
+  const detectionPreview = document.getElementById('detectionPreview');
+
   if (fileType === 'svg') {
+    detectionPreview.style.display = 'none';
     showStatus('Reading SVGs...');
     const contents = [];
     let loaded = 0;
@@ -2115,6 +2578,7 @@ function readFiles(files) {
       showStatus(`Need 3 STL files (got ${targetFiles.length})`, true);
       return;
     }
+    detectionPreview.style.display = 'none';
     showStatus('Parsing STL files...');
     svgInput.value = '';
     const buffers = [];
@@ -2147,7 +2611,7 @@ function readFiles(files) {
       showStatus(`Need 3 images (got ${targetFiles.length})`, true);
       return;
     }
-    showStatus('Processing images...');
+    showStatus('Processing photos...');
     svgInput.value = '';
     const images = [];
     let loaded = 0;
@@ -2159,19 +2623,73 @@ function readFiles(files) {
           images[i] = img;
           loaded++;
           if (loaded === 3) {
-            try {
-              showStatus('Sampling grid from images...');
-              const allBits = images.map(im => PhotoDecoder.extractGrids(im));
-              const result = PatternDecoder.decode3FromBits(allBits);
-              decodedOutput.classList.toggle('error', !result.valid);
-              decodedOutput.textContent = result.valid ? result.text
-                : `Error: ${result.error || 'Could not decode image'}`;
-              showStatus(result.valid ? 'Image decoded successfully' : '', !result.valid);
-            } catch (e) {
-              decodedOutput.classList.add('error');
-              decodedOutput.textContent = `Error: ${e.message}`;
-              showStatus('Image decode failed', true);
-            }
+            const strategies = [
+              { rotation: 'none', threshMult: 1.0,  label: 'default' },
+              { rotation: 'none', threshMult: 0.8,  label: 'permissive' },
+              { rotation: 'none', threshMult: 1.2,  label: 'strict' },
+              { rotation: 'cw',   threshMult: 1.0,  label: 'rotated CW' },
+              { rotation: 'cw',   threshMult: 0.8,  label: 'rotated CW permissive' },
+              { rotation: 'ccw',  threshMult: 1.0,  label: 'rotated CCW' },
+              { rotation: 'ccw',  threshMult: 0.8,  label: 'rotated CCW permissive' },
+            ];
+
+            let bestResult = null;
+            let tried = 0;
+            let lastDebugInfos = null;
+
+            const drawPreview = (debugInfos) => {
+              detectionPreview.style.display = '';
+              for (let i = 0; i < 3; i++) {
+                const canvas = document.getElementById('detectCanvas' + i);
+                PhotoDecoder.drawDebug(canvas, debugInfos[i], i);
+              }
+            };
+
+            const tryNext = () => {
+              if (tried >= strategies.length) {
+                decodedOutput.classList.add('error');
+                decodedOutput.textContent = bestResult
+                  ? `Error: ${bestResult.error || 'Could not decode photos'}`
+                  : 'Error: Could not extract pattern from photos';
+                showStatus('Photo decode failed', true);
+                if (lastDebugInfos) drawPreview(lastDebugInfos);
+                return;
+              }
+
+              const strat = strategies[tried];
+              tried++;
+              showStatus(`Trying ${strat.label} (${tried}/${strategies.length})...`);
+
+              setTimeout(() => {
+                try {
+                  const opts = { threshMult: strat.threshMult, rotation: strat.rotation };
+                  const extracted = images.map((im, idx) => {
+                    const res = PhotoDecoder.extractGrids(im, opts);
+                    console.log(`Photo ${idx} (${strat.label}): ${res ? res.panelBits.length + ' panels' : 'null'}`);
+                    return res;
+                  });
+                  const allBits = extracted.map(e => e ? e.panelBits : null);
+                  lastDebugInfos = extracted.map(e => e ? e.debug : null);
+                  const result = PatternDecoder.decode3FromBits(allBits);
+                  console.log(`Decode (${strat.label}): valid=${result.valid}, text="${result.text}", error=${result.error}`);
+                  if (result.valid && result.text.length > 0) {
+                    decodedOutput.classList.remove('error');
+                    decodedOutput.textContent = result.text;
+                    showStatus(`Photo decoded successfully (${strat.label})`);
+                    drawPreview(lastDebugInfos);
+                    return;
+                  }
+                  if (!bestResult || (result.text && result.text.length > (bestResult.text || '').length)) {
+                    bestResult = result;
+                  }
+                } catch (e) {
+                  console.error(`Strategy ${strat.label} error:`, e);
+                }
+                tryNext();
+              }, 10);
+            };
+
+            tryNext();
           }
         };
         img.src = reader.result;

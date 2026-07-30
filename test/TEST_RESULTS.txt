@@ -1,0 +1,64 @@
+﻿================================================================================
+PatternGen Variant Diversity Test Results
+================================================================================
+
+Test Script: C:\Users\user\Project\ClaudeCode\PatternGen\test9.py
+
+Purpose:
+  Verify that the PatternGen encoder produces distinct visual variants while
+  maintaining correct round-trip encoding/decoding through 3-variant AND-intersection.
+
+Test Cases:
+  1. "HELLO WORLD" - Multi-word text with common letters
+  2. "12345" - Numeric input
+  3. "A" - Single character (minimum input)
+  4. "THE QUICK BROWN FOX JUM" - Maximum single-panel text (23 characters)
+
+Test Methodology:
+  For each input text:
+    1. Generate SVGs for variants 0, 1, and 2 using TextEncoder_.encode() 
+       and SVGRenderer.render()
+    2. Verify all 3 SVG strings are different (set cardinality = 3)
+    3. Verify all 3 variants decode to the same text via PatternDecoder.decode3()
+
+Results: ALL TESTS PASSED (4/4)
+================================================================================
+
+Test 1: "HELLO WORLD"
+--------
+  ??All 3 variants are different
+  ??All 3 variants decode to: 'HELLO WORLD'
+  Status: PASS
+
+Test 2: "12345"
+--------
+  ??All 3 variants are different
+  ??All 3 variants decode to: '12345'
+  Status: PASS
+
+Test 3: "A"
+--------
+  ??All 3 variants are different
+  ??All 3 variants decode to: 'A'
+  Status: PASS
+
+Test 4: "THE QUICK BROWN FOX JUM"
+--------
+  ??All 3 variants are different
+  ??All 3 variants decode to: 'THE QUICK BROWN FOX JUM'
+  Status: PASS
+
+================================================================================
+Summary
+================================================================================
+
+Passed: 4/4
+
+Key Findings:
+  ??All 3 variants produce visually distinct SVG patterns
+  ??Random H/V fill is correctly applied per variant per design
+  ??Diagonal aesthetics vary per variant as expected
+  ??3-variant AND-intersection correctly recovers original text
+  ??Encoding/decoding round-trip works correctly for all test cases
+
+================================================================================
